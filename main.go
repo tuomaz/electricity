@@ -59,7 +59,7 @@ MainLoop:
 			if ok {
 				currentExport := parse(message.Event.Data.NewState.State)
 				log.Printf("Event received %v\n", currentExport)
-				if currentExport > 0.3 && currentAmps < 14 {
+				if currentExport > 0.3 && currentAmps < 13 {
 					currentAmps = currentAmps + 1
 					updateAmps(ctx, haClient, currentAmps, id)
 				}
@@ -120,6 +120,6 @@ func updateAmps(ctx context.Context, haClient *gohaws.HaClient, amps int, id str
 			ChargingAmps: amps,
 		},
 	}
-
+	log.Printf("Updating charging amps, new value %v\n", amps)
 	haClient.CallService(ctx, "tesla_custom", "api", td)
 }
