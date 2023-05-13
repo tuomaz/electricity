@@ -1,5 +1,10 @@
 package main
 
+type Notification struct {
+	Title   string `json:"title,omitempty"`
+	Message string `json:"message,omitempty"`
+}
+
 type Tesla struct {
 	Command    string      `json:"command,omitempty"`
 	Parameters *Parameters `json:"parameters,omitempty"`
