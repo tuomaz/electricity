@@ -22,11 +22,11 @@ func newHaService(ctx context.Context, uri string, token string) *haService {
 }
 
 type haService struct {
+	context       context.Context
 	client        *gohaws.HaClient
 	uri           string
 	token         string
 	eventChannel  chan event
-	context       context.Context
 	subscriptions []subscription
 }
 
@@ -35,25 +35,31 @@ type subscription struct {
 	channel  chan *gohaws.Message
 }
 
-func (ha *haService) subscribe(entity string, channel chan *gohaws.Message) {
-	ha.client.Add(entity)
-	found := false
-	for _, subscription := range ha.subscriptions {
-		if subscription.channel == channel {
-			log.Printf("Added entity " + entity + " to subscription, existing channel")
-			subscription.entities = append(subscription.entities, entity)
-			found = true
-		}
-	}
+func (ha *haService) subscribe(enitity string, channel chan *gohaws.Message) {
+	ha.subscribeMulti([]string{enitity}, channel)
+}
 
-	if !found {
-		subscription := &subscription{
-			channel:  channel,
-			entities: make([]string, 0),
+func (ha *haService) subscribeMulti(entities []string, channel chan *gohaws.Message) {
+	for _, entity := range entities {
+		ha.client.Add(entity)
+		found := false
+		for _, subscription := range ha.subscriptions {
+			if subscription.channel == channel {
+				log.Printf("Added entity " + entity + " to subscription, existing channel")
+				subscription.entities = append(subscription.entities, entity)
+				found = true
+			}
 		}
-		subscription.entities = append(subscription.entities, entity)
-		ha.subscriptions = append(ha.subscriptions, *subscription)
-		log.Printf("Added entity " + entity + " to subscription, new channel")
+
+		if !found {
+			subscription := &subscription{
+				channel:  channel,
+				entities: make([]string, 0),
+			}
+			subscription.entities = append(subscription.entities, entity)
+			ha.subscriptions = append(ha.subscriptions, *subscription)
+			log.Printf("Added entity " + entity + " to subscription, new channel")
+		}
 	}
 }
 
@@ -81,20 +87,23 @@ func (ha *haService) sendNotification(message string, device string) {
 }
 
 func (ha *haService) run() {
+	log.Printf("Start listening to message from HA")
 	ha.client.SubscribeToUpdates(ha.context)
+Loop:
 	for {
 		select {
 		case <-ha.context.Done():
-			break
+			break Loop
 		case message, ok := <-ha.client.EventChannel:
 			if ok {
 				currentExport := ha.parse(message.Event.Data.NewState.State)
 				log.Printf("Event received %v\n", currentExport)
 			} else {
-				break
+				break Loop
 			}
 		}
 	}
+	log.Printf("Stop listening to message from HA")
 }
 
 func (ha *haService) parse(fs interface{}) float64 {

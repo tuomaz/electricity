@@ -25,11 +25,13 @@ func main() {
 	signal.Notify(sigs, syscall.SIGINT, syscall.SIGTERM)
 	go signalHandler(cancel, sigs)
 
-	haUri, haToken, id, area, _ := readEnv()
+	haUri, haToken, _, area, _ := readEnv()
+
+	events := make(chan *event)
 
 	haService := newHaService(baseCtx, haUri, haToken)
 
-	events := make(chan event)
+	_ = newPowerService(ctx, events, *haService, "momentary_active_import_phase_1", "momentary_active_import_phase_2", "momentary_active_import_phase_3")
 
 	priceService := newPriceService(area)
 
@@ -39,6 +41,7 @@ func main() {
 		priceService.updatePrices()
 	*/
 
+	// TODO: move this inside service
 	s := gocron.NewScheduler(time.UTC)
 	job, err := s.Every(10).Minutes().Do(func() {
 		updated, _ := priceService.updatePrices()
@@ -51,17 +54,20 @@ func main() {
 	}
 	s.StartAsync()
 
-	currentAmps := 5
+	//currentAmps := 5
 
-	td := &Tesla{
-		Command: "CHARGING_AMPS",
-		Parameters: &Parameters{
-			PathVars: &PathVars{
-				VehicleID: id,
+	/*
+		td := &Tesla{
+			Command: "CHARGING_AMPS",
+			Parameters: &Parameters{
+				PathVars: &PathVars{
+					VehicleID: id,
+				},
+				ChargingAmps: currentAmps,
 			},
-			ChargingAmps: currentAmps,
-		},
-	}
+		}
+
+	*/
 
 	//haClient.CallService(ctx, "tesla_custom", "api", td)
 
@@ -70,19 +76,9 @@ MainLoop:
 		select {
 		case <-ctx.Done():
 			break MainLoop
-		case message, ok := <-haClient.EventChannel:
+		case event, ok := <-events:
 			if ok {
-				currentExport := parse(message.Event.Data.NewState.State)
-				log.Printf("Event received %v\n", currentExport)
-				if currentExport > 0.3 && currentAmps < 13 {
-					currentAmps = currentAmps + 1
-					//updateAmps(ctx, haClient, currentAmps, id)
-				}
-
-				if currentExport < 0.05 && currentAmps > 5 {
-					currentAmps = currentAmps - 1
-					//updateAmps(ctx, haClient, currentAmps, id)
-				}
+				log.Printf("Recieved event: %v", event)
 			} else {
 				break MainLoop
 			}
