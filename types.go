@@ -18,3 +18,14 @@ type Parameters struct {
 type PathVars struct {
 	VehicleID string `json:"vehicle_id,omitempty"`
 }
+
+type powerEvent struct {
+}
+
+type priceEvent struct {
+}
+
+type event struct {
+	powerEvent powerEvent
+	priceEvent priceEvent
+}

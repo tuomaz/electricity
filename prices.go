@@ -9,9 +9,10 @@ import (
 )
 
 type PriceService struct {
-	area    string
-	today   *nordpool.NordpoolData
-	tomrrow *nordpool.NordpoolData
+	area         string
+	today        *nordpool.NordpoolData
+	tomorrow     *nordpool.NordpoolData
+	eventChannel chan event
 }
 
 func newPriceService(area string) *PriceService {
@@ -42,6 +43,11 @@ func (ps *PriceService) updatePrices() (bool, error) {
 			log.Printf("date diff: %v", tsNew.Sub(tsOld))
 
 			updated = tsNew.Sub(tsOld) > 10000
+
+			if updated {
+				ps.today = ps.tomorrow
+				ps.tomorrow = nordpoolData
+			}
 		}
 	} else {
 		ps.today = nordpoolData

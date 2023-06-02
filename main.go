@@ -2,16 +2,13 @@ package main
 
 import (
 	"context"
-	"fmt"
 	"log"
 	"os"
 	"os/signal"
-	"strconv"
 	"syscall"
 	"time"
 
 	"github.com/go-co-op/gocron"
-	"github.com/tuomaz/gohaws"
 )
 
 func signalHandler(cancel context.CancelFunc, sigs chan os.Signal) {
@@ -28,11 +25,11 @@ func main() {
 	signal.Notify(sigs, syscall.SIGINT, syscall.SIGTERM)
 	go signalHandler(cancel, sigs)
 
-	haUri, haToken, id, area, notifyDevice := readEnv()
+	haUri, haToken, id, area, _ := readEnv()
 
-	haClient := gohaws.New(ctx, haUri, haToken)
-	haClient.Add("sensor.momentary_active_export_phase_1")
-	haClient.SubscribeToUpdates(ctx)
+	haService := newHaService(baseCtx, haUri, haToken)
+
+	events := make(chan event)
 
 	priceService := newPriceService(area)
 
@@ -47,7 +44,6 @@ func main() {
 		updated, _ := priceService.updatePrices()
 		if updated {
 			log.Printf("Prices updated!")
-			sendNotification(ctx, haClient, "Prices updated!", notifyDevice)
 		}
 	})
 	if err != nil {
@@ -67,9 +63,7 @@ func main() {
 		},
 	}
 
-	haClient.CallService(ctx, "tesla_custom", "api", td)
-
-	sendNotification(ctx, haClient, "Electricity starting...", notifyDevice)
+	//haClient.CallService(ctx, "tesla_custom", "api", td)
 
 MainLoop:
 	for {
@@ -135,37 +129,4 @@ func readEnv() (string, string, string, string, string) {
 	}
 
 	return haURI, haToken, id, area, notifyDevice
-}
-
-func parse(fs interface{}) float64 {
-	ff, err := strconv.ParseFloat(fmt.Sprintf("%v", fs), 64)
-	if err != nil {
-		return 0
-	}
-
-	return ff
-}
-
-func updateAmps(ctx context.Context, haClient *gohaws.HaClient, amps int, id string) {
-	td := &Tesla{
-		Command: "CHARGING_AMPS",
-		Parameters: &Parameters{
-			PathVars: &PathVars{
-				VehicleID: id,
-			},
-			ChargingAmps: amps,
-		},
-	}
-	log.Printf("Updating charging amps, new value %v\n", amps)
-	haClient.CallService(ctx, "tesla_custom", "api", td)
-}
-
-func sendNotification(ctx context.Context, haClient *gohaws.HaClient, message string, device string) {
-	/*data := &Notification{
-		Title:   "Electricity",
-		Message: message,
-	}*/
-	sd := map[string]string{"title": "Electricity", "message": message}
-	haClient.CallService(ctx, "notify", device, sd)
-
 }
