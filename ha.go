@@ -2,9 +2,7 @@ package main
 
 import (
 	"context"
-	"fmt"
 	"log"
-	"strconv"
 
 	"github.com/tuomaz/gohaws"
 )
@@ -26,8 +24,7 @@ type haService struct {
 	client        *gohaws.HaClient
 	uri           string
 	token         string
-	eventChannel  chan event
-	subscriptions []subscription
+	subscriptions []*subscription
 }
 
 type subscription struct {
@@ -35,8 +32,8 @@ type subscription struct {
 	channel  chan *gohaws.Message
 }
 
-func (ha *haService) subscribe(enitity string, channel chan *gohaws.Message) {
-	ha.subscribeMulti([]string{enitity}, channel)
+func (ha *haService) subscribe(entity string, channel chan *gohaws.Message) {
+	ha.subscribeMulti([]string{entity}, channel)
 }
 
 func (ha *haService) subscribeMulti(entities []string, channel chan *gohaws.Message) {
@@ -45,7 +42,7 @@ func (ha *haService) subscribeMulti(entities []string, channel chan *gohaws.Mess
 		found := false
 		for _, subscription := range ha.subscriptions {
 			if subscription.channel == channel {
-				log.Printf("Added entity " + entity + " to subscription, existing channel")
+				log.Printf("HA service: added entity " + entity + " to subscription, existing channel")
 				subscription.entities = append(subscription.entities, entity)
 				found = true
 			}
@@ -57,13 +54,13 @@ func (ha *haService) subscribeMulti(entities []string, channel chan *gohaws.Mess
 				entities: make([]string, 0),
 			}
 			subscription.entities = append(subscription.entities, entity)
-			ha.subscriptions = append(ha.subscriptions, *subscription)
-			log.Printf("Added entity " + entity + " to subscription, new channel")
+			ha.subscriptions = append(ha.subscriptions, subscription)
+			log.Printf("HA service: added entity " + entity + " to subscription, new channel")
 		}
 	}
 }
 
-func (ha *haService) updateAmps(amps int, id string) {
+func (ha *haService) updateAmpsTesla(amps int, id string) {
 	td := &Tesla{
 		Command: "CHARGING_AMPS",
 		Parameters: &Parameters{
@@ -73,7 +70,21 @@ func (ha *haService) updateAmps(amps int, id string) {
 			ChargingAmps: amps,
 		},
 	}
-	log.Printf("Updating charging amps, new value %v\n", amps)
+	log.Printf("HA service: updating charging amps, new value %v\n", amps)
+	ha.client.CallService(ha.context, "tesla_custom", "api", td)
+}
+
+func (ha *haService) updateAmpsDawn(amps int, id string) {
+	td := &Tesla{
+		Command: "CHARGING_AMPS",
+		Parameters: &Parameters{
+			PathVars: &PathVars{
+				VehicleID: id,
+			},
+			ChargingAmps: amps,
+		},
+	}
+	log.Printf("HA service: updating charging amps, new value %v\n", amps)
 	ha.client.CallService(ha.context, "tesla_custom", "api", td)
 }
 
@@ -87,7 +98,7 @@ func (ha *haService) sendNotification(message string, device string) {
 }
 
 func (ha *haService) run() {
-	log.Printf("Start listening to message from HA")
+	log.Printf("HA service: start listening to message from HA")
 	ha.client.SubscribeToUpdates(ha.context)
 Loop:
 	for {
@@ -96,23 +107,24 @@ Loop:
 			break Loop
 		case message, ok := <-ha.client.EventChannel:
 			if ok {
-				currentExport := ha.parse(message.Event.Data.NewState.State)
-				log.Printf("Event received %v\n", currentExport)
+				//log.Printf("HA service: event received %v %v\n", message.Event.Data.EntityID, message.Event.Data.NewState.State)
+				ha.sendEventToSubscribers(message)
 			} else {
 				break Loop
 			}
 		}
 	}
-	log.Printf("Stop listening to message from HA")
+	log.Printf("HA service: stop listening to message from HA")
 }
 
-func (ha *haService) parse(fs interface{}) float64 {
-	ff, err := strconv.ParseFloat(fmt.Sprintf("%v", fs), 64)
-	if err != nil {
-		return 0
+func (ha *haService) sendEventToSubscribers(message *gohaws.Message) {
+	for _, subscription := range ha.subscriptions {
+		for _, entity := range subscription.entities {
+			if message.Event.Data.EntityID == entity {
+				subscription.channel <- message
+			}
+		}
 	}
-
-	return ff
 }
 
 /*

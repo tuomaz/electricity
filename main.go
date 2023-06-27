@@ -12,6 +12,7 @@ import (
 )
 
 func signalHandler(cancel context.CancelFunc, sigs chan os.Signal) {
+	log.Printf("Exiting...")
 	<-sigs
 	cancel()
 
@@ -25,15 +26,17 @@ func main() {
 	signal.Notify(sigs, syscall.SIGINT, syscall.SIGTERM)
 	go signalHandler(cancel, sigs)
 
-	haUri, haToken, _, area, _ := readEnv()
+	haUri, haToken, vehicleID, area, _ := readEnv()
 
 	events := make(chan *event)
 
-	haService := newHaService(baseCtx, haUri, haToken)
-
-	_ = newPowerService(ctx, events, *haService, "momentary_active_import_phase_1", "momentary_active_import_phase_2", "momentary_active_import_phase_3")
-
+	haService := newHaService(ctx, haUri, haToken)
+	_ = newPowerService(ctx, events, haService, "sensor.current_phase_1", "sensor.current_phase_2", "sensor.current_phase_3", 16)
 	priceService := newPriceService(area)
+	teslaService := newteslaConsumerService(ctx, events, haService, vehicleID)
+	_ = newDawnConsumerService(ctx, events, haService, "sensor.dawn_status_connector")
+
+	//go haService.run()
 
 	/*
 		priceService.updatePrices()
@@ -71,6 +74,8 @@ func main() {
 
 	//haClient.CallService(ctx, "tesla_custom", "api", td)
 
+	log.Printf("Start main loop")
+
 MainLoop:
 	for {
 		select {
@@ -78,12 +83,19 @@ MainLoop:
 			break MainLoop
 		case event, ok := <-events:
 			if ok {
-				log.Printf("Recieved event: %v", event)
+				if event.powerEvent != nil {
+					if event.powerEvent.overcurrent > 0 {
+						log.Printf("MAIN: decrease amps: %v", event.powerEvent.overcurrent)
+						teslaService.decreaseAmps(event.powerEvent.overcurrent)
+					}
+				}
+
 			} else {
 				break MainLoop
 			}
 		}
 	}
+	log.Printf("End main loop")
 	s.Remove(job)
 }
 

@@ -2,7 +2,9 @@ package main
 
 import (
 	"context"
+	"fmt"
 	"log"
+	"strconv"
 
 	"github.com/tuomaz/gohaws"
 )
@@ -12,12 +14,13 @@ type PowerService struct {
 	phase1 string
 	phase2 string
 	phase3 string
+	max    float64
 
 	haChannel    chan *gohaws.Message
 	eventChannel chan *event
 }
 
-func newPowerService(ctx context.Context, eventChannel chan *event, ha haService, phase1 string, phase2 string, phase3 string) *PowerService {
+func newPowerService(ctx context.Context, eventChannel chan *event, ha *haService, phase1 string, phase2 string, phase3 string, max float64) *PowerService {
 	haChannel := make(chan *gohaws.Message)
 	ha.subscribeMulti([]string{phase1, phase2, phase3}, haChannel)
 
@@ -27,33 +30,49 @@ func newPowerService(ctx context.Context, eventChannel chan *event, ha haService
 		phase1:       phase1,
 		phase2:       phase2,
 		phase3:       phase3,
+		max:          max,
 		haChannel:    haChannel,
 	}
 
-	powerService.run()
+	go powerService.run()
 
 	return powerService
 }
 
 func (ps *PowerService) run() {
+Loop:
 	for {
 		select {
 		case <-ps.ctx.Done():
-			break
+			break Loop
 		case message, ok := <-ps.haChannel:
 			if ok {
-				powerEvent := &powerEvent{}
+				current := parseFloat(message.Event.Data.NewState.State)
+				log.Printf("POWER: current amps %f (%s)\n", current, message.Event.Data.EntityID)
 
-				event := &event{
-					powerEvent: *powerEvent,
+				if current > ps.max {
+					log.Printf("POWER: overcurrent! %v vs %v", current, ps.max)
+					powerEvent := &powerEvent{
+						overcurrent: current - ps.max,
+					}
+					event := &event{
+						powerEvent: powerEvent,
+					}
+
+					ps.eventChannel <- event
 				}
-
-				ps.eventChannel <- event
-
-				log.Printf("Power service received message: %v", message)
 			} else {
-				break
+				break Loop
 			}
 		}
 	}
+}
+
+func parseFloat(fs interface{}) float64 {
+	ff, err := strconv.ParseFloat(fmt.Sprintf("%v", fs), 64)
+	if err != nil {
+		return 0
+	}
+
+	return ff
 }

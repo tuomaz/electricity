@@ -20,12 +20,13 @@ type PathVars struct {
 }
 
 type powerEvent struct {
+	overcurrent float64
 }
 
 type priceEvent struct {
 }
 
 type event struct {
-	powerEvent powerEvent
-	priceEvent priceEvent
+	powerEvent *powerEvent
+	priceEvent *priceEvent
 }

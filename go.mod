@@ -2,7 +2,7 @@ module github.com/tuomaz/electricity
 
 go 1.18
 
-//replace github.com/tuomaz/gohaws => ../gohaws
+replace github.com/tuomaz/gohaws => ../gohaws
 
 require (
 	github.com/go-co-op/gocron v1.27.0
