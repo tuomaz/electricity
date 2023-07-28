@@ -6,7 +6,7 @@ go 1.18
 
 require (
 	github.com/go-co-op/gocron v1.27.0
-	github.com/tuomaz/gohaws v0.0.0-20230513211001-f9e9c254dde3
+	github.com/tuomaz/gohaws v0.0.0-20230721152359-a52c82b67d42
 	github.com/tuomaz/nordpool v0.0.0-20230426185114-c8b1dd7e3977
 )
 

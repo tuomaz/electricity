@@ -50,17 +50,21 @@ Loop:
 				current := parseFloat(message.Event.Data.NewState.State)
 				log.Printf("POWER: current amps %f (%s)\n", current, message.Event.Data.EntityID)
 
-				if current > ps.max {
-					log.Printf("POWER: overcurrent! %v vs %v", current, ps.max)
-					powerEvent := &powerEvent{
-						overcurrent: current - ps.max,
-					}
-					event := &event{
-						powerEvent: powerEvent,
-					}
-
-					ps.eventChannel <- event
+				powerEvent := &powerEvent{
+					phase:   message.Event.Data.EntityID,
+					current: current,
 				}
+
+				if current > ps.max {
+					log.Printf("POWER: overcurrent! %v vs %v, phase %s", current, ps.max, message.Event.Data.EntityID)
+					powerEvent.overCurrent = current - ps.max
+				}
+
+				event := &event{
+					powerEvent: powerEvent,
+				}
+
+				ps.eventChannel <- event
 			} else {
 				break Loop
 			}

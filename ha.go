@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"fmt"
 	"log"
 
 	"github.com/tuomaz/gohaws"
@@ -70,22 +71,24 @@ func (ha *haService) updateAmpsTesla(amps int, id string) {
 			ChargingAmps: amps,
 		},
 	}
-	log.Printf("HA service: updating charging amps, new value %v\n", amps)
-	ha.client.CallService(ha.context, "tesla_custom", "api", td)
+	log.Printf("HA service: updating charging amps Tesla, new value %v\n", amps)
+	ha.client.CallService(ha.context, "tesla_custom", "api", td, "")
 }
 
-func (ha *haService) updateAmpsDawn(amps int, id string) {
-	td := &Tesla{
-		Command: "CHARGING_AMPS",
-		Parameters: &Parameters{
-			PathVars: &PathVars{
-				VehicleID: id,
-			},
-			ChargingAmps: amps,
-		},
+func (ha *haService) updateAmpsDawn(amps int, dawnID string) {
+	log.Printf("HA service: updating charging amps Dawn 1, new value %v\n", amps)
+	if amps < 6 {
+		amps = 6
 	}
-	log.Printf("HA service: updating charging amps, new value %v\n", amps)
-	ha.client.CallService(ha.context, "tesla_custom", "api", td)
+
+	if amps > 16 {
+		amps = 16
+	}
+
+	data := map[string]string{"value": fmt.Sprintf("%d", amps)}
+
+	log.Printf("HA service: updating charging amps Dawn 2, new value %v\n", amps)
+	ha.client.CallService(ha.context, "number", "set_value", data, dawnID)
 }
 
 func (ha *haService) sendNotification(message string, device string) {
@@ -94,7 +97,7 @@ func (ha *haService) sendNotification(message string, device string) {
 		Message: message,
 	}*/
 	sd := map[string]string{"title": "Electricity", "message": message}
-	ha.client.CallService(ha.context, "notify", device, sd)
+	ha.client.CallService(ha.context, "notify", device, sd, "")
 }
 
 func (ha *haService) run() {

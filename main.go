@@ -18,6 +18,8 @@ func signalHandler(cancel context.CancelFunc, sigs chan os.Signal) {
 
 }
 
+const MAX_PHASE_CURRENT = 20
+
 func main() {
 	baseCtx := context.Background()
 	ctx, cancel := context.WithCancel(baseCtx)
@@ -26,15 +28,14 @@ func main() {
 	signal.Notify(sigs, syscall.SIGINT, syscall.SIGTERM)
 	go signalHandler(cancel, sigs)
 
-	haUri, haToken, vehicleID, area, _ := readEnv()
+	haUri, haToken, _, area, _, dawn := readEnv()
 
 	events := make(chan *event)
 
 	haService := newHaService(ctx, haUri, haToken)
-	_ = newPowerService(ctx, events, haService, "sensor.current_phase_1", "sensor.current_phase_2", "sensor.current_phase_3", 16)
+	_ = newPowerService(ctx, events, haService, "sensor.current_phase_1", "sensor.current_phase_2", "sensor.current_phase_3", MAX_PHASE_CURRENT)
 	priceService := newPriceService(area)
-	teslaService := newteslaConsumerService(ctx, events, haService, vehicleID)
-	_ = newDawnConsumerService(ctx, events, haService, "sensor.dawn_status_connector")
+	dawnService := newDawnConsumerService(ctx, events, haService, "sensor.dawn_status_connector", dawn)
 
 	//go haService.run()
 
@@ -84,10 +85,7 @@ MainLoop:
 		case event, ok := <-events:
 			if ok {
 				if event.powerEvent != nil {
-					if event.powerEvent.overcurrent > 0 {
-						log.Printf("MAIN: decrease amps: %v", event.powerEvent.overcurrent)
-						teslaService.decreaseAmps(event.powerEvent.overcurrent)
-					}
+					dawnService.updateCurrents(event.powerEvent.phase, event.powerEvent.current)
 				}
 
 			} else {
@@ -99,8 +97,8 @@ MainLoop:
 	s.Remove(job)
 }
 
-func readEnv() (string, string, string, string, string) {
-	var haURI, haToken, id, area, notifyDevice string
+func readEnv() (string, string, string, string, string, string) {
+	var haURI, haToken, id, area, notifyDevice, dawn string
 	value, ok := os.LookupEnv("HAURI")
 	if ok {
 		haURI = value
@@ -136,5 +134,12 @@ func readEnv() (string, string, string, string, string) {
 		log.Fatalf("no notify device found")
 	}
 
-	return haURI, haToken, id, area, notifyDevice
+	value, ok = os.LookupEnv("DAWN")
+	if ok {
+		dawn = value
+	} else {
+		log.Fatalf("no Dawn device found")
+	}
+
+	return haURI, haToken, id, area, notifyDevice, dawn
 }

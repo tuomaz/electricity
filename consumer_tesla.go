@@ -30,7 +30,7 @@ func newteslaConsumerService(ctx context.Context, eventChannel chan *event, haSe
 }
 
 func (tc *teslaConsumerService) updateAmps(amps int) {
-	if amps > 5 && amps < 17 {
+	if amps > 6 && amps < 17 {
 		tc.haService.updateAmpsTesla(amps, tc.vehicleID)
 	} else {
 		log.Printf("TESLA: not setting new amps, not in range: %d\n", amps)
