@@ -47,7 +47,7 @@ func main() {
 
 	// TODO: move this inside service
 	s := gocron.NewScheduler(time.UTC)
-	job, err := s.Every(10).Minutes().Do(func() {
+	job, err := s.Every(30).Minutes().Do(func() {
 		updated, _ := priceService.updatePrices()
 		if updated {
 			log.Printf("Prices updated!")

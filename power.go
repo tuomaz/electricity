@@ -48,7 +48,7 @@ Loop:
 		case message, ok := <-ps.haChannel:
 			if ok {
 				current := parseFloat(message.Event.Data.NewState.State)
-				log.Printf("POWER: current amps %f (%s)\n", current, message.Event.Data.EntityID)
+				//log.Printf("POWER: current amps %f (%s)\n", current, message.Event.Data.EntityID)
 
 				powerEvent := &powerEvent{
 					phase:   message.Event.Data.EntityID,
