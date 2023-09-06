@@ -73,14 +73,14 @@ func (tc *dawnConsumerService) decreaseAmps(amps float64) {
 }
 
 func (tc *dawnConsumerService) updateCurrents(phase string, amps float64) {
-	log.Printf("DAWN: saving %s : %f", phase, amps)
+	//log.Printf("DAWN: saving %s : %f", phase, amps)
 	tc.currents[phase] = amps
 	tc.setCurrentCurrent()
 }
 
 func (tc *dawnConsumerService) setCurrentCurrent() {
 	currentMaxAmp := tc.getMaxCurrent()
-	log.Printf("DAWN: max current %f", currentMaxAmp)
+	//log.Printf("DAWN: max current %f", currentMaxAmp)
 	if currentMaxAmp > 1 {
 		change := 0.0
 		if currentMaxAmp > MAX_PHASE_CURRENT {
@@ -105,10 +105,10 @@ func (tc *dawnConsumerService) setCurrentCurrent() {
 
 func (tc *dawnConsumerService) getMaxCurrent() float64 {
 	max := 0.0
-	for key, value := range tc.currents {
+	for _, value := range tc.currents {
 		if value > max {
 			max = value
-			log.Printf("DAWN: found max: %s : %f", key, value)
+			//log.Printf("DAWN: found max: %s : %f", key, value)
 		}
 	}
 	return max
