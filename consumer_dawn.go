@@ -95,9 +95,9 @@ func (tc *dawnConsumerService) setCurrentCurrent() {
 			log.Printf("DAWN: lowered amps to %d", int(tc.currentAmps))
 		} else {
 			if int(currentMaxAmp+1) < 20 && tc.currentAmps < 16 {
-				tc.haService.updateAmpsDawn(int(currentMaxAmp+1), tc.dawnId)
-				log.Printf("DAWN: increased amps to %d", int(currentMaxAmp+1))
-				tc.currentAmps = currentMaxAmp + 1
+				tc.haService.updateAmpsDawn(int(tc.currentAmps+1), tc.dawnId)
+				log.Printf("DAWN: increased amps to %d", int(tc.currentAmps+1))
+				tc.currentAmps += 1
 			}
 		}
 	}
