@@ -76,7 +76,6 @@ func (ha *haService) updateAmpsTesla(amps int, id string) {
 }
 
 func (ha *haService) updateAmpsDawn(amps int, dawnID string) {
-	log.Printf("HA service: updating charging amps Dawn 1, new value %v\n", amps)
 	if amps < 6 {
 		amps = 6
 	}
@@ -87,7 +86,6 @@ func (ha *haService) updateAmpsDawn(amps int, dawnID string) {
 
 	data := map[string]string{"value": fmt.Sprintf("%d", amps)}
 
-	log.Printf("HA service: updating charging amps Dawn 2, new value %v\n", amps)
 	ha.client.CallService(ha.context, "number", "set_value", data, dawnID)
 }
 
