@@ -26,7 +26,7 @@ func newDawnConsumerService(ctx context.Context, eventChannel chan *event, ha *h
 		ctx:         ctx,
 		haService:   ha,
 		minimumAmps: 6,
-		currentAmps: 0,
+		currentAmps: 16,
 		haChannel:   haChannel,
 		dawnId:      dawnId,
 		currents:    make(map[string]float64),
