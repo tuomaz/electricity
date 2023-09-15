@@ -39,7 +39,7 @@ func (ps *PriceService) updatePrices() (bool, error) {
 		if err != nil {
 			log.Fatal(err)
 		}
-		log.Printf("date diff: %v", tsNew.Sub(tsOld))
+		//log.Printf("date diff: %v", tsNew.Sub(tsOld))
 
 		updated = tsNew.Sub(tsOld) > 10000
 
