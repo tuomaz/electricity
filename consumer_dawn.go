@@ -97,15 +97,15 @@ func (tc *dawnConsumerService) setCurrentCurrent() {
 			tc.cooldown = 3
 		} else {
 			if int(currentMaxAmp+1) < 20 && tc.currentAmps < 16 {
-				if tc.cooldown == 0 {
-					tc.haService.updateAmpsDawn(int(tc.currentAmps+1), tc.dawnId)
-					log.Printf("DAWN: increased amps to %d", int(tc.currentAmps+1))
-					tc.currentAmps += 1
-				} else {
-					if tc.cooldown > 0 {
-						tc.cooldown = tc.cooldown - 1
-					}
+				//if tc.cooldown == 0 {
+				tc.haService.updateAmpsDawn(int(tc.currentAmps+1), tc.dawnId)
+				log.Printf("DAWN: increased amps to %d (cooldown=%d)", int(tc.currentAmps+1), tc.cooldown)
+				tc.currentAmps += 1
+				//} else {
+				if tc.cooldown > 0 {
+					tc.cooldown = tc.cooldown - 1
 				}
+				//}
 			}
 		}
 	}
