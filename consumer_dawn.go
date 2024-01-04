@@ -94,7 +94,7 @@ func (tc *dawnConsumerService) setCurrentCurrent() {
 			}
 			tc.haService.updateAmpsDawn(int(tc.currentAmps), tc.dawnId)
 			log.Printf("DAWN: lowered amps to %d", int(tc.currentAmps))
-			tc.cooldown = 10
+			tc.cooldown = 3
 		} else {
 			if int(currentMaxAmp+1) < 20 && tc.currentAmps < 16 {
 				if tc.cooldown == 0 {
