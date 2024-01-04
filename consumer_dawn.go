@@ -17,6 +17,7 @@ type dawnConsumerService struct {
 	eventChannel chan *event
 	dawnId       string
 	currents     map[string]float64
+	cooldown     int
 }
 
 func newDawnConsumerService(ctx context.Context, eventChannel chan *event, ha *haService, statusSensor string, dawnId string) *dawnConsumerService {
@@ -93,11 +94,18 @@ func (tc *dawnConsumerService) setCurrentCurrent() {
 			}
 			tc.haService.updateAmpsDawn(int(tc.currentAmps), tc.dawnId)
 			log.Printf("DAWN: lowered amps to %d", int(tc.currentAmps))
+			tc.cooldown = 10
 		} else {
 			if int(currentMaxAmp+1) < 20 && tc.currentAmps < 16 {
-				tc.haService.updateAmpsDawn(int(tc.currentAmps+1), tc.dawnId)
-				log.Printf("DAWN: increased amps to %d", int(tc.currentAmps+1))
-				tc.currentAmps += 1
+				if tc.cooldown == 0 {
+					tc.haService.updateAmpsDawn(int(tc.currentAmps+1), tc.dawnId)
+					log.Printf("DAWN: increased amps to %d", int(tc.currentAmps+1))
+					tc.currentAmps += 1
+				} else {
+					if tc.cooldown < 0 {
+						tc.cooldown = tc.cooldown - 1
+					}
+				}
 			}
 		}
 	}
