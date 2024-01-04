@@ -102,7 +102,7 @@ func (tc *dawnConsumerService) setCurrentCurrent() {
 					log.Printf("DAWN: increased amps to %d", int(tc.currentAmps+1))
 					tc.currentAmps += 1
 				} else {
-					if tc.cooldown < 0 {
+					if tc.cooldown > 0 {
 						tc.cooldown = tc.cooldown - 1
 					}
 				}
