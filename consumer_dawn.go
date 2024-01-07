@@ -74,7 +74,7 @@ func (tc *dawnConsumerService) decreaseAmps(amps float64) {
 }
 
 func (tc *dawnConsumerService) updateCurrents(phase string, amps float64) {
-	//log.Printf("DAWN: saving %s : %f", phase, amps)
+	log.Printf("DAWN: saving %s : %f", phase, amps)
 	tc.currents[phase] = amps
 	tc.setCurrentCurrent()
 }

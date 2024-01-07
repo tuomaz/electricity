@@ -87,7 +87,6 @@ MainLoop:
 				if event.powerEvent != nil {
 					dawnService.updateCurrents(event.powerEvent.phase, event.powerEvent.current)
 				}
-
 			} else {
 				break MainLoop
 			}
