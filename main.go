@@ -21,6 +21,7 @@ func signalHandler(cancel context.CancelFunc, sigs chan os.Signal) {
 const MAX_PHASE_CURRENT = 20
 
 func main() {
+	log.Print("Starting up alpha version 1")
 	baseCtx := context.Background()
 	ctx, cancel := context.WithCancel(baseCtx)
 
