@@ -39,7 +39,12 @@ func (ha *haService) manageConnection() {
 			return
 		default:
 			log.Printf("HA service: attempting to connect to %s", ha.uri)
-			client := gohaws.New(ha.context, ha.uri, ha.token)
+			client, err := gohaws.New(ha.context, ha.uri, ha.token)
+			if err != nil {
+				log.Printf("HA service: failed to create client: %v, retrying in 5 seconds...", err)
+				time.Sleep(5 * time.Second)
+				continue
+			}
 			ha.client = client
 
 			// Re-subscribe existing entities if this is a reconnection
