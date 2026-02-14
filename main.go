@@ -5,6 +5,7 @@ import (
 	"log"
 	"os"
 	"os/signal"
+	"strings"
 	"syscall"
 	"time"
 
@@ -75,42 +76,42 @@ func readEnv() (string, string, string, string, string, string) {
 	var haURI, haToken, area, dawn, dawnSwitch, notifyDevice string
 	value, ok := os.LookupEnv("HAURI")
 	if ok {
-		haURI = value
+		haURI = strings.TrimSpace(value)
 	} else {
 		log.Fatalf("no Home Assistant URI found")
 	}
 
 	value, ok = os.LookupEnv("HATOKEN")
 	if ok {
-		haToken = value
+		haToken = strings.TrimSpace(value)
 	} else {
 		log.Fatalf("no Home Assistant auth token found")
 	}
 
 	value, ok = os.LookupEnv("AREA")
 	if ok {
-		area = value
+		area = strings.TrimSpace(value)
 	} else {
 		log.Fatalf("no ID found")
 	}
 
 	value, ok = os.LookupEnv("DAWN")
 	if ok {
-		dawn = value
+		dawn = strings.TrimSpace(value)
 	} else {
 		log.Fatalf("no Dawn device found")
 	}
 
 	value, ok = os.LookupEnv("DAWN_SWITCH")
 	if ok {
-		dawnSwitch = value
+		dawnSwitch = strings.TrimSpace(value)
 	} else {
 		log.Fatalf("no Dawn switch found")
 	}
 
 	value, ok = os.LookupEnv("NOTIFY_DEVICE")
 	if ok {
-		notifyDevice = value
+		notifyDevice = strings.TrimSpace(value)
 	} else {
 		log.Fatalf("no notify device found")
 	}
