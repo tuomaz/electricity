@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"log"
 	"math"
+	"strings"
 	"time"
 
 	"github.com/tuomaz/gohaws"
@@ -25,7 +26,8 @@ type dawnConsumerService struct {
 	pid                  *PIDController
 	setpoint             float64
 	overcurrentStartTime time.Time
-	isCharging           bool
+	isCharging           bool // Tracks if the charger is technically "on"
+	connectorStatus      string
 }
 
 func newDawnConsumerService(ctx context.Context, eventChannel chan *event, ha *haService, statusSensor string, dawnId string, dawnSwitch string, notifyDevice string, setpoint float64) *dawnConsumerService {
@@ -68,8 +70,9 @@ Loop:
 			break Loop
 		case message, ok := <-ps.haChannel:
 			if ok {
-				state := fmt.Sprintf("%v", message.Event.Data.NewState.State)
-				log.Printf("DAWN: charging connector status: %s\n", state)
+				state := strings.ToLower(fmt.Sprintf("%v", message.Event.Data.NewState.State))
+				ps.connectorStatus = state
+				log.Printf("DAWN: connector status updated: %s", state)
 			} else {
 				break Loop
 			}
@@ -80,6 +83,27 @@ Loop:
 func (tc *dawnConsumerService) updateCurrents(phase string, amps float64) {
 	tc.currents[phase] = amps
 	tc.calculateAndSetAmps()
+}
+
+func (tc *dawnConsumerService) isActuallyCharging() bool {
+	// If the emergency stop triggered, we definitely aren't charging
+	if !tc.isCharging {
+		return false
+	}
+
+	// Logic for common EV charger statuses (strings or codes)
+	// Add/adjust these based on your specific HA sensor values
+	switch tc.connectorStatus {
+	case "charging", "3", "busy":
+		return true
+	case "connected", "2", "awaiting start":
+		// If connected but not charging yet, we still want to set the AMPS
+		// so it starts at the correct level
+		return true
+	default:
+		// disconnected, finishing, error, etc.
+		return false
+	}
 }
 
 func (tc *dawnConsumerService) calculateAndSetAmps() {
@@ -94,7 +118,7 @@ func (tc *dawnConsumerService) calculateAndSetAmps() {
 			msg := fmt.Sprintf("Sufficient headroom (%.2fA). Restarting EV charging.", tc.setpoint-maxPhaseCurrent)
 			log.Printf("DAWN: %s", msg)
 			tc.haService.sendNotification(msg, tc.notifyDevice)
-			
+
 			tc.isCharging = true
 			tc.haService.setDawnSwitch(true, tc.dawnSwitch)
 			tc.currentAmps = tc.minimumAmps
@@ -105,7 +129,15 @@ func (tc *dawnConsumerService) calculateAndSetAmps() {
 		return
 	}
 
-	// 2. SAFETY OVERRIDE & STOP LOGIC
+	// 2. CHECK IF ADJUSTMENT IS NEEDED
+	// If the car is not plugged in or charging, don't bother the HA API with updates
+	if !tc.isActuallyCharging() {
+		// We still keep the PID error fresh but don't execute
+		tc.pid.Update(maxPhaseCurrent)
+		return
+	}
+
+	// 3. SAFETY OVERRIDE & STOP LOGIC
 	if maxPhaseCurrent > tc.setpoint {
 		if tc.currentAmps <= tc.minimumAmps {
 			if tc.overcurrentStartTime.IsZero() {
@@ -137,7 +169,7 @@ func (tc *dawnConsumerService) calculateAndSetAmps() {
 
 	tc.overcurrentStartTime = time.Time{}
 
-	// 3. OPTIMIZATION LAYER (PID)
+	// 4. OPTIMIZATION LAYER (PID)
 	adjustment := tc.pid.Update(maxPhaseCurrent)
 	targetAmps := tc.currentAmps + adjustment
 
