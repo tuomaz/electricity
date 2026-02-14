@@ -1,6 +1,6 @@
 services:
   electricity:
-    image: electricity
+    image: ghcr.io/tuomaz/electricity:latest
     restart: always
     environment:
       ID: "your_id_here"
