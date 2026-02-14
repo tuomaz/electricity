@@ -38,13 +38,7 @@ func (ha *haService) manageConnection() {
 		case <-ha.context.Done():
 			return
 		default:
-			tokenPrefix := ""
-			tokenSuffix := ""
-			if len(ha.token) > 6 {
-				tokenPrefix = ha.token[:3]
-				tokenSuffix = ha.token[len(ha.token)-3:]
-			}
-			log.Printf("HA service: attempting to connect to %s (token length: %d, format: %s...%s)", ha.uri, len(ha.token), tokenPrefix, tokenSuffix)
+			log.Printf("HA service: attempting to connect to %s", ha.uri)
 			client, err := gohaws.New(ha.context, ha.uri, ha.token)
 			if err != nil {
 				log.Printf("HA service: failed to create client: %v, retrying in 5 seconds...", err)
