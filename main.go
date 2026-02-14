@@ -33,7 +33,7 @@ func main() {
 
 	events := make(chan *event)
 
-	haService := newHaService(ctx, haUri, haToken)
+	haService := newHaService(ctx, haUri, haToken, notifyDevice)
 	_ = newPowerService(ctx, events, haService, "sensor.current_phase_1", "sensor.current_phase_2", "sensor.current_phase_3", MAX_PHASE_CURRENT)
 	priceService := newPriceService(area)
 	dawnService := newDawnConsumerService(ctx, events, haService, "sensor.dawn_status_connector", dawn, dawnSwitch, notifyDevice, MAX_PHASE_CURRENT)

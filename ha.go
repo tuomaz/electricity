@@ -9,22 +9,25 @@ import (
 	"github.com/tuomaz/gohaws"
 )
 
-func newHaService(ctx context.Context, uri string, token string) *haService {
+func newHaService(ctx context.Context, uri string, token string, notifyDevice string) *haService {
 	ha := &haService{
-		uri:     uri,
-		token:   token,
-		context: ctx,
+		uri:          uri,
+		token:        token,
+		context:      ctx,
+		notifyDevice: notifyDevice,
 	}
 	go ha.manageConnection()
 	return ha
 }
 
 type haService struct {
-	context       context.Context
-	client        *gohaws.HaClient
-	uri           string
-	token         string
-	subscriptions []*subscription
+	context         context.Context
+	client          *gohaws.HaClient
+	uri             string
+	token           string
+	notifyDevice    string
+	startupNotified bool
+	subscriptions   []*subscription
 }
 
 type subscription struct {
@@ -46,6 +49,11 @@ func (ha *haService) manageConnection() {
 				continue
 			}
 			ha.client = client
+
+			if !ha.startupNotified && ha.notifyDevice != "" {
+				ha.sendNotification("Electricity Management Service started and connected", ha.notifyDevice)
+				ha.startupNotified = true
+			}
 
 			// Re-subscribe existing entities if this is a reconnection
 			for _, sub := range ha.subscriptions {
