@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"log"
+	"time"
 
 	"github.com/tuomaz/gohaws"
 )
@@ -16,6 +17,8 @@ haClient.Add("sensor.momentary_active_export_phase_1")
 func newHaService(ctx context.Context, uri string, token string) *haService {
 	client := gohaws.New(ctx, uri, token)
 	haService := &haService{client: client, uri: uri, token: token, context: ctx}
+	// Give the client a moment to connect and authenticate
+	time.Sleep(2 * time.Second)
 	go haService.run()
 	return haService
 }
@@ -95,18 +98,24 @@ func (ha *haService) sendNotification(message string, device string) {
 
 func (ha *haService) run() {
 	log.Printf("HA service: start listening to message from HA")
-	ha.client.SubscribeToUpdates(ha.context)
+	err := ha.client.SubscribeToUpdates(ha.context)
+	if err != nil {
+		log.Printf("HA service: failed to subscribe: %v", err)
+		return
+	}
+
 Loop:
 	for {
 		select {
 		case <-ha.context.Done():
 			break Loop
 		case message, ok := <-ha.client.EventChannel:
-			if ok {
-				//log.Printf("HA service: event received %v %v\n", message.Event.Data.EntityID, message.Event.Data.NewState.State)
-				ha.sendEventToSubscribers(message)
-			} else {
+			if !ok {
+				log.Printf("HA service: event channel closed")
 				break Loop
+			}
+			if message.Event.Data != nil {
+				ha.sendEventToSubscribers(message)
 			}
 		}
 	}

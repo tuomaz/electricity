@@ -12,10 +12,9 @@ import (
 )
 
 func signalHandler(cancel context.CancelFunc, sigs chan os.Signal) {
-	log.Printf("Exiting...")
-	<-sigs
+	sig := <-sigs
+	log.Printf("Received signal %v, exiting...", sig)
 	cancel()
-
 }
 
 const MAX_PHASE_CURRENT = 20
