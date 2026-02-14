@@ -77,6 +77,17 @@ func readEnv() (string, string, string, string, string, string) {
 	value, ok := os.LookupEnv("HAURI")
 	if ok {
 		haURI = strings.TrimSpace(value)
+		// Ensure it has the /api/websocket path
+		if !strings.HasSuffix(haURI, "/api/websocket") {
+			if strings.HasSuffix(haURI, "/") {
+				haURI += "api/websocket"
+			} else {
+				haURI += "/api/websocket"
+			}
+		}
+		// Convert http/https to ws/wss if present
+		haURI = strings.Replace(haURI, "https://", "wss://", 1)
+		haURI = strings.Replace(haURI, "http://", "ws://", 1)
 	} else {
 		log.Fatalf("no Home Assistant URI found")
 	}
