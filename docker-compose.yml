@@ -1,0 +1,12 @@
+services:
+  electricity:
+    image: electricity
+    restart: always
+    environment:
+      ID: "your_id_here"
+      HATOKEN: "your_ha_token_here"
+      HAURI: "your_ha_uri_here"
+      AREA: "SE2"
+      DAWN: "number.dawn_maximum_current"
+      DAWN_SWITCH: "switch.dawn_charging"
+      NOTIFY_DEVICE: "mobile_app_your_device"

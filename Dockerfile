@@ -1,11 +1,12 @@
-FROM golang:1.20-alpine AS build
-RUN apk add git
-RUN mkdir /build
-WORKDIR /build
-RUN git clone https://github.com/tuomaz/electricity.git
-WORKDIR /build/electricity
-RUN go build
+FROM golang:1.22-alpine AS build
+RUN apk add --no-cache git
+WORKDIR /app
+COPY go.mod go.sum ./
+RUN go mod download
+COPY . .
+RUN go build -o electricity .
 
-FROM alpine:3.17 AS final
-COPY --from=build /build/electricity/electricity electricity
-CMD ./electricity
+FROM alpine:3.19 AS final
+WORKDIR /app
+COPY --from=build /app/electricity /app/electricity
+CMD ["./electricity"]

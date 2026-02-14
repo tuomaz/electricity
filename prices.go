@@ -9,9 +9,10 @@ import (
 )
 
 type PriceService struct {
-	area    string
-	today   *nordpool.NordpoolData
-	tomrrow *nordpool.NordpoolData
+	area         string
+	today        *nordpool.NordpoolData
+	tomorrow     *nordpool.NordpoolData
+	eventChannel chan event
 }
 
 func newPriceService(area string) *PriceService {
@@ -28,23 +29,34 @@ func (ps *PriceService) updatePrices() (bool, error) {
 
 	format := "2006-01-02T15:04:05"
 
-	if ps.today != nil {
-		if ps.today != nil {
-			tsOld, err := time.Parse(format, ps.today.Data.Rows[0].StartTime)
-			if err != nil {
-				log.Fatal(err)
-			}
-
-			tsNew, err := time.Parse(format, nordpoolData.Data.Rows[0].StartTime)
-			if err != nil {
-				log.Fatal(err)
-			}
-			log.Printf("date diff: %v", tsNew.Sub(tsOld))
-
-			updated = tsNew.Sub(tsOld) > 10000
+	if ps.today != nil && len(ps.today.Data.Rows) > 0 {
+		if len(nordpoolData.Data.Rows) == 0 {
+			return false, errors.New("received empty data from Nordpool")
 		}
+		tsOld, err := time.Parse(format, ps.today.Data.Rows[0].StartTime)
+		if err != nil {
+			log.Fatal(err)
+		}
+
+		tsNew, err := time.Parse(format, nordpoolData.Data.Rows[0].StartTime)
+		if err != nil {
+			log.Fatal(err)
+		}
+		//log.Printf("date diff: %v", tsNew.Sub(tsOld))
+
+		updated = tsNew.Sub(tsOld) > 10000
+
+		if updated {
+			ps.today = ps.tomorrow
+			ps.tomorrow = nordpoolData
+		}
+
 	} else {
-		ps.today = nordpoolData
+		if len(nordpoolData.Data.Rows) > 0 {
+			ps.today = nordpoolData
+		} else {
+			return false, errors.New("received empty data from Nordpool")
+		}
 	}
 
 	return updated, nil
