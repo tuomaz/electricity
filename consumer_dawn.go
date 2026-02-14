@@ -4,33 +4,55 @@ import (
 	"context"
 	"fmt"
 	"log"
+	"math"
+	"time"
 
 	"github.com/tuomaz/gohaws"
 )
 
 type dawnConsumerService struct {
-	ctx          context.Context
-	haService    *haService
-	currentAmps  float64
-	minimumAmps  float64
-	haChannel    chan *gohaws.Message
-	eventChannel chan *event
-	dawnId       string
-	currents     map[string]float64
-	cooldown     int
+	ctx                  context.Context
+	haService            *haService
+	currentAmps          float64
+	minimumAmps          float64
+	maximumAmps          float64
+	haChannel            chan *gohaws.Message
+	eventChannel         chan *event
+	dawnId               string
+	dawnSwitch           string
+	notifyDevice         string
+	currents             map[string]float64
+	pid                  *PIDController
+	setpoint             float64
+	overcurrentStartTime time.Time
+	isCharging           bool
 }
 
-func newDawnConsumerService(ctx context.Context, eventChannel chan *event, ha *haService, statusSensor string, dawnId string) *dawnConsumerService {
+func newDawnConsumerService(ctx context.Context, eventChannel chan *event, ha *haService, statusSensor string, dawnId string, dawnSwitch string, notifyDevice string, setpoint float64) *dawnConsumerService {
 	haChannel := make(chan *gohaws.Message)
 	ha.subscribe(statusSensor, haChannel)
+
+	pid := &PIDController{
+		Kp:       0.5,
+		Ki:       0.05,
+		Kd:       0.1,
+		Setpoint: setpoint,
+	}
+
 	dawnConsumerService := &dawnConsumerService{
-		ctx:         ctx,
-		haService:   ha,
-		minimumAmps: 6,
-		currentAmps: 16,
-		haChannel:   haChannel,
-		dawnId:      dawnId,
-		currents:    make(map[string]float64),
+		ctx:          ctx,
+		haService:    ha,
+		minimumAmps:  6,
+		maximumAmps:  16,
+		currentAmps:  6,
+		haChannel:    haChannel,
+		dawnId:       dawnId,
+		dawnSwitch:   dawnSwitch,
+		notifyDevice: notifyDevice,
+		currents:     make(map[string]float64),
+		pid:          pid,
+		setpoint:     setpoint,
+		isCharging:   true,
 	}
 
 	go dawnConsumerService.run()
@@ -47,7 +69,7 @@ Loop:
 		case message, ok := <-ps.haChannel:
 			if ok {
 				state := fmt.Sprintf("%v", message.Event.Data.NewState.State)
-				log.Printf("DAWN: new charging state: %s\n", state)
+				log.Printf("DAWN: charging connector status: %s\n", state)
 			} else {
 				break Loop
 			}
@@ -55,61 +77,88 @@ Loop:
 	}
 }
 
-func (tc *dawnConsumerService) updateAmps(amps int) {
-}
-
-func (tc *dawnConsumerService) decreaseAmps(amps float64) {
-	if tc.currentAmps > 0 && tc.currentAmps <= tc.minimumAmps+1 {
-		// cannot do much
-		log.Printf("Dawn amps already at lowest")
-
-	} else {
-		tc.currentAmps = tc.currentAmps - amps
-		if tc.currentAmps < 6 {
-			tc.currentAmps = 6
-		}
-		log.Printf("DAWN: setting new amps: %v", tc.currentAmps)
-		tc.haService.updateAmpsDawn(int(tc.currentAmps), tc.dawnId)
-	}
-}
-
 func (tc *dawnConsumerService) updateCurrents(phase string, amps float64) {
-	log.Printf("DAWN: saving %s : %f", phase, amps)
 	tc.currents[phase] = amps
-	tc.setCurrentCurrent()
+	tc.calculateAndSetAmps()
 }
 
-func (tc *dawnConsumerService) setCurrentCurrent() {
-	currentMaxAmp := tc.getMaxCurrent()
-	//log.Printf("DAWN: max current %f", currentMaxAmp)
-	if currentMaxAmp > 1 {
-		change := 0.0
-		if currentMaxAmp > MAX_PHASE_CURRENT {
-			// need to lower
-			change = currentMaxAmp - MAX_PHASE_CURRENT
-			if tc.currentAmps-change > 6 {
-				tc.currentAmps = tc.currentAmps - change
-			} else {
-				tc.currentAmps = 6
-			}
+func (tc *dawnConsumerService) calculateAndSetAmps() {
+	maxPhaseCurrent := tc.getMaxCurrent()
+	if maxPhaseCurrent == 0 {
+		return
+	}
+
+	// 1. RESTART LOGIC
+	if !tc.isCharging {
+		if maxPhaseCurrent <= tc.setpoint-8.0 {
+			msg := fmt.Sprintf("Sufficient headroom (%.2fA). Restarting EV charging.", tc.setpoint-maxPhaseCurrent)
+			log.Printf("DAWN: %s", msg)
+			tc.haService.sendNotification(msg, tc.notifyDevice)
+			
+			tc.isCharging = true
+			tc.haService.setDawnSwitch(true, tc.dawnSwitch)
+			tc.currentAmps = tc.minimumAmps
 			tc.haService.updateAmpsDawn(int(tc.currentAmps), tc.dawnId)
-			log.Printf("DAWN: lowered amps to %d", int(tc.currentAmps))
-			tc.cooldown = 3
+			tc.pid.Integral = 0
+			tc.overcurrentStartTime = time.Time{}
+		}
+		return
+	}
+
+	// 2. SAFETY OVERRIDE & STOP LOGIC
+	if maxPhaseCurrent > tc.setpoint {
+		if tc.currentAmps <= tc.minimumAmps {
+			if tc.overcurrentStartTime.IsZero() {
+				tc.overcurrentStartTime = time.Now()
+				log.Printf("DAWN: Overcurrent detected at minimum charging. Starting 10s shutdown timer.")
+			} else if time.Since(tc.overcurrentStartTime) > 10*time.Second {
+				msg := fmt.Sprintf("CRITICAL OVERCURRENT (%.2fA). Emergency stop of EV charger.", maxPhaseCurrent)
+				log.Printf("DAWN: %s", msg)
+				tc.haService.sendNotification(msg, tc.notifyDevice)
+
+				tc.isCharging = false
+				tc.haService.setDawnSwitch(false, tc.dawnSwitch)
+				tc.overcurrentStartTime = time.Time{}
+				return
+			}
 		} else {
-			if int(currentMaxAmp+1) < 20 && tc.currentAmps < 16 {
-				if tc.cooldown == 0 {
-					tc.haService.updateAmpsDawn(int(tc.currentAmps+1), tc.dawnId)
-					log.Printf("DAWN: increased amps to %d (cooldown=%d)", int(tc.currentAmps+1), tc.cooldown)
-					tc.currentAmps += 1
-				} else {
-					if tc.cooldown > 0 {
-						tc.cooldown = tc.cooldown - 1
-						log.Printf("DAWN: cooldown is %d", tc.cooldown)
-					}
-				}
+			overage := maxPhaseCurrent - tc.setpoint
+			reduction := math.Ceil(overage)
+			newAmps := math.Max(tc.minimumAmps, tc.currentAmps-reduction)
+
+			if int(newAmps) != int(tc.currentAmps) {
+				log.Printf("DAWN: SAFETY REDUCTION! Phase current %.2fA exceeds limit. %vA -> %vA", maxPhaseCurrent, int(tc.currentAmps), int(newAmps))
+				tc.setAmps(newAmps)
+				tc.pid.Integral = 0
 			}
 		}
+		return
 	}
+
+	tc.overcurrentStartTime = time.Time{}
+
+	// 3. OPTIMIZATION LAYER (PID)
+	adjustment := tc.pid.Update(maxPhaseCurrent)
+	targetAmps := tc.currentAmps + adjustment
+
+	if targetAmps < tc.minimumAmps {
+		targetAmps = tc.minimumAmps
+	}
+	if targetAmps > tc.maximumAmps {
+		targetAmps = tc.maximumAmps
+	}
+
+	if int(targetAmps) != int(tc.currentAmps) {
+		log.Printf("DAWN: PID Adjustment %vA -> %vA (Max Phase: %.2fA)", int(tc.currentAmps), int(targetAmps), maxPhaseCurrent)
+		tc.setAmps(targetAmps)
+	} else {
+		tc.currentAmps = targetAmps
+	}
+}
+
+func (tc *dawnConsumerService) setAmps(amps float64) {
+	tc.currentAmps = amps
+	tc.haService.updateAmpsDawn(int(tc.currentAmps), tc.dawnId)
 }
 
 func (tc *dawnConsumerService) getMaxCurrent() float64 {
@@ -117,10 +166,7 @@ func (tc *dawnConsumerService) getMaxCurrent() float64 {
 	for _, value := range tc.currents {
 		if value > max {
 			max = value
-			//log.Printf("DAWN: found max: %s : %f", key, value)
 		}
 	}
 	return max
 }
-
-// sensor.dawn_status_connector

@@ -61,20 +61,6 @@ func (ha *haService) subscribeMulti(entities []string, channel chan *gohaws.Mess
 	}
 }
 
-func (ha *haService) updateAmpsTesla(amps int, id string) {
-	td := &Tesla{
-		Command: "CHARGING_AMPS",
-		Parameters: &Parameters{
-			PathVars: &PathVars{
-				VehicleID: id,
-			},
-			ChargingAmps: amps,
-		},
-	}
-	log.Printf("HA service: updating charging amps Tesla, new value %v\n", amps)
-	ha.client.CallService(ha.context, "tesla_custom", "api", td, "")
-}
-
 func (ha *haService) updateAmpsDawn(amps int, dawnID string) {
 	if amps < 6 {
 		amps = 6
@@ -87,6 +73,15 @@ func (ha *haService) updateAmpsDawn(amps int, dawnID string) {
 	data := map[string]string{"value": fmt.Sprintf("%d", amps)}
 
 	ha.client.CallService(ha.context, "number", "set_value", data, dawnID)
+}
+
+func (ha *haService) setDawnSwitch(on bool, switchID string) {
+	service := "turn_off"
+	if on {
+		service = "turn_on"
+	}
+	log.Printf("HA service: setting Dawn switch %s to %v", switchID, on)
+	ha.client.CallService(ha.context, "switch", service, nil, switchID)
 }
 
 func (ha *haService) sendNotification(message string, device string) {

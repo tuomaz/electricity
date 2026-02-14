@@ -30,6 +30,9 @@ func (ps *PriceService) updatePrices() (bool, error) {
 	format := "2006-01-02T15:04:05"
 
 	if ps.today != nil && len(ps.today.Data.Rows) > 0 {
+		if len(nordpoolData.Data.Rows) == 0 {
+			return false, errors.New("received empty data from Nordpool")
+		}
 		tsOld, err := time.Parse(format, ps.today.Data.Rows[0].StartTime)
 		if err != nil {
 			log.Fatal(err)
@@ -49,7 +52,11 @@ func (ps *PriceService) updatePrices() (bool, error) {
 		}
 
 	} else {
-		ps.today = nordpoolData
+		if len(nordpoolData.Data.Rows) > 0 {
+			ps.today = nordpoolData
+		} else {
+			return false, errors.New("received empty data from Nordpool")
+		}
 	}
 
 	return updated, nil

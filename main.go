@@ -29,22 +29,14 @@ func main() {
 	signal.Notify(sigs, syscall.SIGINT, syscall.SIGTERM)
 	go signalHandler(cancel, sigs)
 
-	haUri, haToken, _, area, _, dawn := readEnv()
+	haUri, haToken, area, dawn, dawnSwitch, notifyDevice := readEnv()
 
 	events := make(chan *event)
 
 	haService := newHaService(ctx, haUri, haToken)
 	_ = newPowerService(ctx, events, haService, "sensor.current_phase_1", "sensor.current_phase_2", "sensor.current_phase_3", MAX_PHASE_CURRENT)
 	priceService := newPriceService(area)
-	dawnService := newDawnConsumerService(ctx, events, haService, "sensor.dawn_status_connector", dawn)
-
-	//go haService.run()
-
-	/*
-		priceService.updatePrices()
-		time.Sleep(5000)
-		priceService.updatePrices()
-	*/
+	dawnService := newDawnConsumerService(ctx, events, haService, "sensor.dawn_status_connector", dawn, dawnSwitch, notifyDevice, MAX_PHASE_CURRENT)
 
 	// TODO: move this inside service
 	s := gocron.NewScheduler(time.UTC)
@@ -58,23 +50,6 @@ func main() {
 		log.Fatalf("error setting up cron: %v", err)
 	}
 	s.StartAsync()
-
-	//currentAmps := 5
-
-	/*
-		td := &Tesla{
-			Command: "CHARGING_AMPS",
-			Parameters: &Parameters{
-				PathVars: &PathVars{
-					VehicleID: id,
-				},
-				ChargingAmps: currentAmps,
-			},
-		}
-
-	*/
-
-	//haClient.CallService(ctx, "tesla_custom", "api", td)
 
 	log.Printf("Start main loop")
 
@@ -98,7 +73,7 @@ MainLoop:
 }
 
 func readEnv() (string, string, string, string, string, string) {
-	var haURI, haToken, id, area, notifyDevice, dawn string
+	var haURI, haToken, area, dawn, dawnSwitch, notifyDevice string
 	value, ok := os.LookupEnv("HAURI")
 	if ok {
 		haURI = value
@@ -113,25 +88,11 @@ func readEnv() (string, string, string, string, string, string) {
 		log.Fatalf("no Home Assistant auth token found")
 	}
 
-	value, ok = os.LookupEnv("ID")
-	if ok {
-		id = value
-	} else {
-		log.Fatalf("no ID found")
-	}
-
 	value, ok = os.LookupEnv("AREA")
 	if ok {
 		area = value
 	} else {
 		log.Fatalf("no ID found")
-	}
-
-	value, ok = os.LookupEnv("NOTIFY_DEVICE")
-	if ok {
-		notifyDevice = value
-	} else {
-		log.Fatalf("no notify device found")
 	}
 
 	value, ok = os.LookupEnv("DAWN")
@@ -141,5 +102,19 @@ func readEnv() (string, string, string, string, string, string) {
 		log.Fatalf("no Dawn device found")
 	}
 
-	return haURI, haToken, id, area, notifyDevice, dawn
+	value, ok = os.LookupEnv("DAWN_SWITCH")
+	if ok {
+		dawnSwitch = value
+	} else {
+		log.Fatalf("no Dawn switch found")
+	}
+
+	value, ok = os.LookupEnv("NOTIFY_DEVICE")
+	if ok {
+		notifyDevice = value
+	} else {
+		log.Fatalf("no notify device found")
+	}
+
+	return haURI, haToken, area, dawn, dawnSwitch, notifyDevice
 }
