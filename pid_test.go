@@ -15,7 +15,7 @@ func TestPIDController_Proportional(t *testing.T) {
 
 	// First update sets the time
 	pid.Update(15.0)
-	time.Sleep(10 * time.Millisecond)
+	time.Sleep(150 * time.Millisecond) // Need > 100ms for our new floor
 
 	// Second update should trigger P
 	// Error = 20 - 15 = 5. Output = 1.0 * 5 = 5
@@ -30,12 +30,11 @@ func TestPIDController_Integral(t *testing.T) {
 	}
 
 	pid.Update(18.0)
-	// Error = 2
-	time.Sleep(100 * time.Millisecond)
+	time.Sleep(200 * time.Millisecond)
 	
 	output := pid.Update(18.0)
-	// dt ~ 0.1s. I = 1.0 * (2 * 0.1) = 0.2
-	assert.True(t, output > 0.05 && output < 0.25, "Output should be roughly 0.1-0.2")
+	// dt ~ 0.2s. I = 1.0 * (2 * 0.2) = 0.4
+	assert.True(t, output > 0.1 && output < 0.6, "Output should be roughly 0.4")
 }
 
 func TestPIDController_Clamping(t *testing.T) {
@@ -44,9 +43,10 @@ func TestPIDController_Clamping(t *testing.T) {
 		Setpoint: 20.0,
 	}
 
-	pid.Update(10.0) // Error = 10
+	pid.Update(10.0) // sets time
+	time.Sleep(150 * time.Millisecond)
+	
 	pid.Integral = 1000.0 // Force windup
-
 	pid.Update(10.0)
 	assert.Equal(t, 50.0, pid.Integral, "Integral should be clamped to 50")
 }
@@ -57,10 +57,9 @@ func TestPIDController_Derivative(t *testing.T) {
 		Setpoint: 20.0,
 	}
 
-	pid.Update(15.0) // Error = 5
-	time.Sleep(10 * time.Millisecond)
+	pid.Update(15.0) // sets time
+	time.Sleep(150 * time.Millisecond)
 	
-	pid.Update(18.0) // Error = 2. Change = -3.
-	// D = 1.0 * (-3 / dt). Since dt is small, D will be a large negative number.
+	pid.Update(18.0) 
 	assert.True(t, pid.LastError == 2.0)
 }

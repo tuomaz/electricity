@@ -22,7 +22,8 @@ func (p *PIDController) Update(measurement float64) float64 {
 	}
 
 	dt := now.Sub(p.LastTime).Seconds()
-	if dt <= 0 {
+	// Prevent division by zero or near-zero which causes derivative explosion
+	if dt < 0.1 {
 		return 0
 	}
 
