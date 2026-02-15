@@ -14,7 +14,8 @@ import (
 type dawnConsumerService struct {
 	ctx                  context.Context
 	haService            *haService
-	currentAmps          float64
+	currentAmps          float64 // The setting we have requested
+	actualAmps           float64 // What the car is actually drawing
 	minimumAmps          float64
 	maximumAmps          float64
 	haChannel            chan *gohaws.Message
@@ -22,6 +23,7 @@ type dawnConsumerService struct {
 	dawnId               string
 	dawnSwitch           string
 	notifyDevice         string
+	dawnCurrentId        string
 	currents             map[string]float64
 	pid                  *PIDController
 	setpoint             float64
@@ -32,11 +34,10 @@ type dawnConsumerService struct {
 	lastHardSafetyEvent  time.Time
 }
 
-func newDawnConsumerService(ctx context.Context, eventChannel chan *event, ha *haService, statusSensor string, dawnId string, dawnSwitch string, notifyDevice string, setpoint float64) *dawnConsumerService {
+func newDawnConsumerService(ctx context.Context, eventChannel chan *event, ha *haService, statusSensor string, dawnId string, dawnSwitch string, notifyDevice string, dawnCurrentId string, setpoint float64) *dawnConsumerService {
 	haChannel := make(chan *gohaws.Message)
-	ha.subscribe(statusSensor, haChannel)
+	ha.subscribeMulti([]string{statusSensor, dawnCurrentId}, haChannel)
 
-	// Target exactly the configured max amp
 	pid := &PIDController{
 		Kp:       0.4,
 		Ki:       0.01,
@@ -45,18 +46,20 @@ func newDawnConsumerService(ctx context.Context, eventChannel chan *event, ha *h
 	}
 
 	dawnConsumerService := &dawnConsumerService{
-		ctx:          ctx,
-		haService:    ha,
-		minimumAmps:  6,
-		maximumAmps:  16,
-		currentAmps:  6,
-		haChannel:    haChannel,
-		dawnId:       dawnId,
-		dawnSwitch:   dawnSwitch,
-		notifyDevice: notifyDevice,
-		currents:     make(map[string]float64),
-		pid:          pid,
-		setpoint:     setpoint,
+		ctx:           ctx,
+		haService:     ha,
+		minimumAmps:   6,
+		maximumAmps:   16,
+		currentAmps:   6,
+		actualAmps:    0,
+		haChannel:     haChannel,
+		dawnId:        dawnId,
+		dawnSwitch:    dawnSwitch,
+		notifyDevice:  notifyDevice,
+		dawnCurrentId: dawnCurrentId,
+		currents:      make(map[string]float64),
+		pid:           pid,
+		setpoint:      setpoint,
 		lastExecution: time.Now(),
 	}
 
@@ -73,9 +76,14 @@ Loop:
 			break Loop
 		case message, ok := <-ps.haChannel:
 			if ok {
-				state := strings.ToLower(fmt.Sprintf("%v", message.Event.Data.NewState.State))
-				ps.connectorStatus = state
-				log.Printf("DAWN: connector status: %s", state)
+				if message.Event.Data.EntityID == ps.dawnCurrentId {
+					ps.actualAmps = parseFloat(message.Event.Data.NewState.State)
+					//log.Printf("DAWN: actual draw updated: %.2fA", ps.actualAmps)
+				} else {
+					state := strings.ToLower(fmt.Sprintf("%v", message.Event.Data.NewState.State))
+					ps.connectorStatus = state
+					log.Printf("DAWN: connector status: %s", state)
+				}
 			} else {
 				break Loop
 			}
@@ -125,11 +133,16 @@ func (tc *dawnConsumerService) calculateAndSetAmps() {
 		return
 	}
 
-	// 2. HARD SAFETY OVERRIDE (Serious overcurrent > 10% of fuse)
-	// Triggers at 22A if fuse is 20A.
+	// 2. HARD SAFETY OVERRIDE
 	hardSafetyThreshold := tc.setpoint + 2.0
 	if maxPhaseCurrent > hardSafetyThreshold && time.Since(tc.lastHardSafetyEvent) > 5*time.Second {
-		if tc.currentAmps <= tc.minimumAmps {
+		// BASELINE: Use Actual Draw if it's lower than our current setting
+		baseline := math.Min(tc.currentAmps, tc.actualAmps)
+		if baseline < tc.minimumAmps {
+			baseline = tc.currentAmps // Fallback if actual is weirdly low (e.g. 0 during ramp)
+		}
+
+		if baseline <= tc.minimumAmps {
 			if tc.overcurrentStartTime.IsZero() {
 				tc.overcurrentStartTime = time.Now()
 				log.Printf("DAWN: Overcurrent detected at minimum charging. Starting 10s shutdown timer.")
@@ -146,14 +159,16 @@ func (tc *dawnConsumerService) calculateAndSetAmps() {
 		} else {
 			overage := maxPhaseCurrent - tc.setpoint
 			reduction := math.Ceil(overage)
-			newAmps := math.Max(tc.minimumAmps, tc.currentAmps-reduction)
+			
+			// We reduce from the ACTUAL draw, not the theoretical target
+			newAmps := math.Max(tc.minimumAmps, baseline-reduction)
 
 			if int(newAmps) != int(tc.currentAmps) {
-				log.Printf("DAWN: HARD SAFETY REDUCTION! Phase current %.2fA exceeds limit significantly. %vA -> %vA", maxPhaseCurrent, int(tc.currentAmps), int(newAmps))
+				log.Printf("DAWN: HARD SAFETY REDUCTION! Max phase %.2fA. Car drawing %.2fA. Reducing setting %vA -> %vA", maxPhaseCurrent, tc.actualAmps, int(tc.currentAmps), int(newAmps))
 				tc.setAmps(newAmps)
 				tc.pid.Integral = 0
 				tc.lastHardSafetyEvent = time.Now()
-				tc.lastExecution = time.Now() // Sync PID timer
+				tc.lastExecution = time.Now()
 			}
 		}
 		return
@@ -162,12 +177,9 @@ func (tc *dawnConsumerService) calculateAndSetAmps() {
 	tc.overcurrentStartTime = time.Time{}
 
 	// 3. THROTTLE & LOCKOUT
-	// Normal decision loop every 20 seconds
 	if time.Since(tc.lastExecution) < 20*time.Second {
 		return
 	}
-
-	// If we just had a HARD safety event, wait longer before increasing
 	if time.Since(tc.lastHardSafetyEvent) < 60*time.Second {
 		return
 	}
@@ -178,7 +190,6 @@ func (tc *dawnConsumerService) calculateAndSetAmps() {
 	}
 
 	// 5. OPTIMIZATION LAYER (PID)
-	// This handles minor overcurrent (e.g. 20.5A) and all under-current adjustments
 	adjustment := tc.pid.Update(maxPhaseCurrent)
 	targetAmps := tc.currentAmps + adjustment
 
@@ -190,7 +201,7 @@ func (tc *dawnConsumerService) calculateAndSetAmps() {
 	}
 
 	if int(targetAmps) != int(tc.currentAmps) {
-		log.Printf("DAWN: PID Adjustment %vA -> %vA (Max Phase: %.2fA, Target: %.1fA)", int(tc.currentAmps), int(targetAmps), maxPhaseCurrent, tc.setpoint)
+		log.Printf("DAWN: PID Adjustment %vA -> %vA (Max Phase: %.2fA, Actual Draw: %.2fA)", int(tc.currentAmps), int(targetAmps), maxPhaseCurrent, tc.actualAmps)
 		tc.setAmps(targetAmps)
 	} else {
 		tc.currentAmps = targetAmps

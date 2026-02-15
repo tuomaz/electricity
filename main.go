@@ -29,14 +29,14 @@ func main() {
 	signal.Notify(sigs, syscall.SIGINT, syscall.SIGTERM)
 	go signalHandler(cancel, sigs)
 
-	haUri, haToken, area, dawn, dawnSwitch, notifyDevice := readEnv()
+	haUri, haToken, area, dawn, dawnSwitch, notifyDevice, dawnCurrent := readEnv()
 
 	events := make(chan *event)
 
 	haService := newHaService(ctx, haUri, haToken, notifyDevice)
 	_ = newPowerService(ctx, events, haService, "sensor.current_phase_1", "sensor.current_phase_2", "sensor.current_phase_3", MAX_PHASE_CURRENT)
 	priceService := newPriceService(area)
-	dawnService := newDawnConsumerService(ctx, events, haService, "sensor.dawn_status_connector", dawn, dawnSwitch, notifyDevice, MAX_PHASE_CURRENT)
+	dawnService := newDawnConsumerService(ctx, events, haService, "sensor.dawn_status_connector", dawn, dawnSwitch, notifyDevice, dawnCurrent, MAX_PHASE_CURRENT)
 
 	// TODO: move this inside service
 	s := gocron.NewScheduler(time.UTC)
@@ -72,8 +72,8 @@ MainLoop:
 	s.Remove(job)
 }
 
-func readEnv() (string, string, string, string, string, string) {
-	var haURI, haToken, area, dawn, dawnSwitch, notifyDevice string
+func readEnv() (string, string, string, string, string, string, string) {
+	var haURI, haToken, area, dawn, dawnSwitch, notifyDevice, dawnCurrent string
 	value, ok := os.LookupEnv("HAURI")
 	if ok {
 		haURI = strings.TrimSpace(value)
@@ -116,5 +116,12 @@ func readEnv() (string, string, string, string, string, string) {
 		log.Fatalf("no notify device found")
 	}
 
-	return haURI, haToken, area, dawn, dawnSwitch, notifyDevice
+	value, ok = os.LookupEnv("DAWN_CURRENT")
+	if ok {
+		dawnCurrent = strings.TrimSpace(value)
+	} else {
+		log.Fatalf("no Dawn current sensor found")
+	}
+
+	return haURI, haToken, area, dawn, dawnSwitch, notifyDevice, dawnCurrent
 }

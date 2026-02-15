@@ -40,6 +40,7 @@ The service periodically (every 30 minutes) fetches electricity prices from **No
 | `AREA` | Nordpool Price Area (e.g., `SE2`) |
 | `DAWN` | Home Assistant Entity ID for the Dawn charger's current setting (e.g., `number.dawn_amps`) |
 | `DAWN_SWITCH` | Home Assistant Entity ID for the Dawn charger's on/off switch (e.g., `switch.dawn_charging`) |
+| `DAWN_CURRENT` | HA Entity ID for the actual charging current sensor (e.g., `sensor.dawn_actual_current`) |
 | `NOTIFY_DEVICE` | Home Assistant notification service name (e.g., `mobile_app_my_phone`) |
 
 ## Technical Stack

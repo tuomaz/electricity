@@ -24,12 +24,14 @@ func TestDawnConsumer_MaxCurrent(t *testing.T) {
 func TestDawnConsumer_SafetyOverride(t *testing.T) {
 	// We need to verify that if max current > setpoint, we reduce immediately
 	service := &dawnConsumerService{
-		currentAmps:  16.0,
-		minimumAmps:  6.0,
-		maximumAmps:  16.0,
-		setpoint:     20.0,
-		notifyDevice: "test_device",
-		currents:     make(map[string]float64),
+		currentAmps:   16.0,
+		actualAmps:    16.0,
+		minimumAmps:   6.0,
+		maximumAmps:   16.0,
+		setpoint:      20.0,
+		notifyDevice:  "test_device",
+		dawnCurrentId: "sensor.dawn_current",
+		currents:      make(map[string]float64),
 		pid: &PIDController{
 			Setpoint: 20.0,
 		},
