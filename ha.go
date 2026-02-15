@@ -55,12 +55,20 @@ func (ha *haService) manageConnection() {
 				ha.startupNotified = true
 			}
 
-			// Re-subscribe existing entities if this is a reconnection
+			// Re-subscribe existing entities
 			for _, sub := range ha.subscriptions {
 				for _, entity := range sub.entities {
 					log.Printf("HA service: re-subscribing to %s", entity)
 					ha.client.Add(entity)
 				}
+			}
+
+			// Fetch current states so we are aware of reality immediately
+			log.Printf("HA service: fetching current states")
+			if err := ha.client.FetchStates(ha.context); err != nil {
+				log.Printf("HA service: warning: could not fetch initial states: %v", err)
+			} else {
+				ha.injectCurrentStates()
 			}
 
 			// Run the listener. run() will return if connection is lost.
@@ -72,13 +80,36 @@ func (ha *haService) manageConnection() {
 	}
 }
 
+func (ha *haService) injectCurrentStates() {
+	for _, sub := range ha.subscriptions {
+		for _, entityID := range sub.entities {
+			if state, ok := ha.client.GetState(entityID); ok {
+				// Wrap state in a Message so it matches the format of live events
+				msg := &gohaws.Message{
+					Event: &gohaws.Event{
+						Data: &gohaws.Data{
+							EntityID: entityID,
+							NewState: state,
+						},
+					},
+				}
+				// Send to the specific subscriber channel
+				select {
+				case sub.channel <- msg:
+					log.Printf("HA service: injected initial state for %s", entityID)
+				default:
+				}
+			}
+		}
+	}
+}
+
 func (ha *haService) subscribe(entity string, channel chan *gohaws.Message) {
 	ha.subscribeMulti([]string{entity}, channel)
 }
 
 func (ha *haService) subscribeMulti(entities []string, channel chan *gohaws.Message) {
 	for _, entity := range entities {
-		// Add to internal tracking for reconnection
 		found := false
 		for _, sub := range ha.subscriptions {
 			if sub.channel == channel {
@@ -96,7 +127,6 @@ func (ha *haService) subscribeMulti(entities []string, channel chan *gohaws.Mess
 			ha.subscriptions = append(ha.subscriptions, sub)
 		}
 
-		// Add to active client if it exists
 		if ha.client != nil {
 			log.Printf("HA service: adding entity %s to active client", entity)
 			ha.client.Add(entity)
@@ -168,11 +198,9 @@ func (ha *haService) sendEventToSubscribers(message *gohaws.Message) {
 	for _, sub := range ha.subscriptions {
 		for _, entity := range sub.entities {
 			if message.Event.Data.EntityID == entity {
-				// Non-blocking send to avoid hanging the HA listener if a service is slow
 				select {
 				case sub.channel <- message:
 				default:
-					//log.Printf("HA service: warning: subscriber channel full, dropping message for %s", entity)
 				}
 			}
 		}

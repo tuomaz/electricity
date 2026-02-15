@@ -7,7 +7,7 @@ go 1.24.0
 require (
 	github.com/go-co-op/gocron v1.37.0
 	github.com/stretchr/testify v1.11.1
-	github.com/tuomaz/gohaws v0.0.0-20260214192412-5b159cebc17c
+	github.com/tuomaz/gohaws v0.0.0-20260215092634-32d5911a7cd1
 	github.com/tuomaz/nordpool v0.0.0-20230911180659-0d2f7d98b006
 )
 
