@@ -34,8 +34,8 @@ github.com/stretchr/testify v1.8.0/go.mod h1:yNjHg4UonilssWZ8iaSj1OCr/vHnekPRkoO
 github.com/stretchr/testify v1.8.2/go.mod h1:w2LPCIKwWwSfY2zedu0+kehJoqGctiVI29o6fzry7u4=
 github.com/stretchr/testify v1.11.1 h1:7s2iGBzp5EwR7/aIZr8ao5+dra3wiQyKjjFuvgVKu7U=
 github.com/stretchr/testify v1.11.1/go.mod h1:wZwfW3scLgRK+23gO65QZefKpKQRnfz6sD981Nm4B6U=
-github.com/tuomaz/gohaws v0.0.0-20260215092634-32d5911a7cd1 h1:nT0if4zW8MZp1M8PSDYqSRZTC38LgH07cSZX24rs+D0=
-github.com/tuomaz/gohaws v0.0.0-20260215092634-32d5911a7cd1/go.mod h1:HujLw0OsgcAYFkZ2P4hJgq9s103S5nDrlxrA+NRt9MQ=
+github.com/tuomaz/gohaws v0.0.0-20260215094358-74956dd4016d h1:S7LbP3wF5JE7VONLWkcNADZkyioCc4Py2gvyIsrLYec=
+github.com/tuomaz/gohaws v0.0.0-20260215094358-74956dd4016d/go.mod h1:HujLw0OsgcAYFkZ2P4hJgq9s103S5nDrlxrA+NRt9MQ=
 github.com/tuomaz/nordpool v0.0.0-20230911180659-0d2f7d98b006 h1:F5fhYIq3Lf51u/Nj7xTWicpZlTckO2C1X1PeOOHlBfY=
 github.com/tuomaz/nordpool v0.0.0-20230911180659-0d2f7d98b006/go.mod h1:WXZdUrj/e/kUMFq22YdWcHCLNjDvWH17da5RsdrTEd0=
 go.uber.org/atomic v1.9.0/go.mod h1:fEN4uk6kAWBTFdckzkM89CLk9XfWZrxpCo0nPH17wJc=
