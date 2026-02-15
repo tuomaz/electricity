@@ -25,37 +25,43 @@ type dawnConsumerService struct {
 	currents             map[string]float64
 	pid                  *PIDController
 	setpoint             float64
+	targetCurrent        float64 // The PID target (e.g. 18A for a 20A fuse)
 	overcurrentStartTime time.Time
 	isCharging           bool
 	connectorStatus      string
 	lastExecution        time.Time
+	lastSafetyEvent      time.Time
 }
 
 func newDawnConsumerService(ctx context.Context, eventChannel chan *event, ha *haService, statusSensor string, dawnId string, dawnSwitch string, notifyDevice string, setpoint float64) *dawnConsumerService {
 	haChannel := make(chan *gohaws.Message)
 	ha.subscribe(statusSensor, haChannel)
 
+	// We set the PID target slightly below the fuse limit to provide a buffer
+	targetCurrent := setpoint - 2.0
+
 	pid := &PIDController{
-		Kp:       0.5,
-		Ki:       0.02, // Lowered Ki for more patience
-		Kd:       0.05, // Lowered Kd to reduce sensitivity to spikes
-		Setpoint: setpoint,
+		Kp:       0.4,  // Gentler response
+		Ki:       0.01, // Much more patient integration
+		Kd:       0.05,
+		Setpoint: targetCurrent,
 	}
 
 	dawnConsumerService := &dawnConsumerService{
-		ctx:          ctx,
-		haService:    ha,
-		minimumAmps:  6,
-		maximumAmps:  16,
-		currentAmps:  6,
-		haChannel:    haChannel,
-		dawnId:       dawnId,
-		dawnSwitch:   dawnSwitch,
-		notifyDevice: notifyDevice,
-		currents:     make(map[string]float64),
-		pid:          pid,
-		setpoint:     setpoint,
-		isCharging:   true,
+		ctx:           ctx,
+		haService:     ha,
+		minimumAmps:   6,
+		maximumAmps:   16,
+		currentAmps:   6,
+		haChannel:     haChannel,
+		dawnId:        dawnId,
+		dawnSwitch:    dawnSwitch,
+		notifyDevice:  notifyDevice,
+		currents:      make(map[string]float64),
+		pid:           pid,
+		setpoint:      setpoint,
+		targetCurrent: targetCurrent,
+		lastExecution: time.Now(),
 	}
 
 	go dawnConsumerService.run()
@@ -123,8 +129,9 @@ func (tc *dawnConsumerService) calculateAndSetAmps() {
 		return
 	}
 
-	// 2. SAFETY OVERRIDE (Always runs, bypassing throttle)
-	if maxPhaseCurrent > tc.setpoint {
+	// 2. SAFETY OVERRIDE (Hard Fuse Protection)
+	// We wait at least 5s between safety reductions to allow the charger to react
+	if maxPhaseCurrent > tc.setpoint && time.Since(tc.lastSafetyEvent) > 5*time.Second {
 		if tc.currentAmps <= tc.minimumAmps {
 			if tc.overcurrentStartTime.IsZero() {
 				tc.overcurrentStartTime = time.Now()
@@ -148,7 +155,8 @@ func (tc *dawnConsumerService) calculateAndSetAmps() {
 				log.Printf("DAWN: SAFETY REDUCTION! Phase current %.2fA exceeds limit. %vA -> %vA", maxPhaseCurrent, int(tc.currentAmps), int(newAmps))
 				tc.setAmps(newAmps)
 				tc.pid.Integral = 0
-				tc.lastExecution = time.Now() // Sync throttle
+				tc.lastSafetyEvent = time.Now()
+				tc.lastExecution = time.Now() // Also reset PID timer
 			}
 		}
 		return
@@ -156,9 +164,14 @@ func (tc *dawnConsumerService) calculateAndSetAmps() {
 
 	tc.overcurrentStartTime = time.Time{}
 
-	// 3. THROTTLE (PID logic only runs every 10 seconds)
-	// This prevents the "flipping" caused by near-simultaneous phase updates.
-	if time.Since(tc.lastExecution) < 10*time.Second {
+	// 3. THROTTLE & SAFETY LOCKOUT
+	// PID decision only every 20 seconds for stability
+	if time.Since(tc.lastExecution) < 20*time.Second {
+		return
+	}
+
+	// If we just had a safety event, wait longer before increasing (Safety Lockout)
+	if time.Since(tc.lastSafetyEvent) < 60*time.Second {
 		return
 	}
 
@@ -179,10 +192,9 @@ func (tc *dawnConsumerService) calculateAndSetAmps() {
 	}
 
 	if int(targetAmps) != int(tc.currentAmps) {
-		log.Printf("DAWN: PID Adjustment %vA -> %vA (Max Phase: %.2fA)", int(tc.currentAmps), int(targetAmps), maxPhaseCurrent)
+		log.Printf("DAWN: PID Adjustment %vA -> %vA (Max Phase: %.2fA, Target: %.1fA)", int(tc.currentAmps), int(targetAmps), maxPhaseCurrent, tc.targetCurrent)
 		tc.setAmps(targetAmps)
 	} else {
-		// Update internal float state for integral accumulation even if we don't send to HA
 		tc.currentAmps = targetAmps
 	}
 	tc.lastExecution = time.Now()
