@@ -97,6 +97,12 @@ func (tc *dawnConsumerService) isActuallyCharging() bool {
 		return false
 	}
 
+	// On app restart, the status might be empty until the first HA event arrives.
+	// We assume it's charging so we can start managing load immediately.
+	if tc.connectorStatus == "" {
+		return true
+	}
+
 	switch tc.connectorStatus {
 	case "charging", "3", "busy":
 		return true
