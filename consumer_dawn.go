@@ -77,8 +77,10 @@ Loop:
 		case message, ok := <-ps.haChannel:
 			if ok {
 				if message.Event.Data.EntityID == ps.dawnCurrentId {
-					ps.actualAmps = parseFloat(message.Event.Data.NewState.State)
-					//log.Printf("DAWN: actual draw updated: %.2fA", ps.actualAmps)
+					totalAmps := parseFloat(message.Event.Data.NewState.State)
+					// Divide by 3 because the sensor is a sum of all 3 phases
+					ps.actualAmps = totalAmps / 3.0
+					//log.Printf("DAWN: total draw %.2fA -> per-phase draw: %.2fA", totalAmps, ps.actualAmps)
 				} else {
 					state := strings.ToLower(fmt.Sprintf("%v", message.Event.Data.NewState.State))
 					ps.connectorStatus = state
