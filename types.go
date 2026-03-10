@@ -5,10 +5,20 @@ type Notification struct {
 	Message string `json:"message,omitempty"`
 }
 
+type SensorType int
+
+const (
+	SensorTypeCurrent SensorType = iota
+	SensorTypeExport
+	SensorTypeVoltage
+)
+
 type powerEvent struct {
+	sensorType  SensorType
 	phase       string
+	value       float64
 	overCurrent float64
-	current     float64
+	phaseIndex  int // 1, 2, or 3
 }
 
 type priceEvent struct {

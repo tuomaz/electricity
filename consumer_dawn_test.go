@@ -22,26 +22,27 @@ func TestDawnConsumer_MaxCurrent(t *testing.T) {
 }
 
 func TestDawnConsumer_SafetyOverride(t *testing.T) {
-	// We need to verify that if max current > setpoint, we reduce immediately
 	service := &dawnConsumerService{
+		isCharging:    true,
 		currentAmps:   16.0,
 		actualAmps:    16.0,
 		minimumAmps:   6.0,
 		maximumAmps:   16.0,
 		setpoint:      20.0,
-		notifyDevice:  "test_device",
-		dawnCurrentId: "sensor.dawn_current",
 		currents:      make(map[string]float64),
+		exports:       make(map[string]float64),
+		haService:     &haService{},
 		pid: &PIDController{
 			Setpoint: 20.0,
 		},
 	}
 
-	// Case: 22A on phase 1. Overage = 2A.
-	service.currents["p1"] = 22.0
+	// 1. Case: 23A on phase 1 (3A over setpoint). Should reduce immediately.
+	service.currents["phase1"] = 23.0
+	service.calculateAndSetAmps()
 	
-	// We'll mock the haService later or just check the internal state change if we refactor setAmps
-	// For now, let's verify calculateAndSetAmps logic if we can.
+	// Reduction = ceil(23 - 20) = 3A. 16 - 3 = 13A.
+	assert.Equal(t, 13.0, service.currentAmps, "Should reduce current immediately on overcurrent")
 }
 
 func TestParseFloat(t *testing.T) {
