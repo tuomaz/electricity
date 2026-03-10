@@ -70,10 +70,11 @@ func TestDawnConsumer_PVStopCondition(t *testing.T) {
 		pid:             &PIDController{},
 	}
 
-	// 1. Surplus drops to 0.4A (below threshold 0.5A)
-	service.exports["phase1"] = 0.4
-	service.exports["phase2"] = 0.4
-	service.exports["phase3"] = 0.4
+	// 1. Grid import detected (0.5A on phase 1)
+	service.currents["phase1"] = 0.5
+	service.exports["phase1"] = 0
+	service.exports["phase2"] = 0
+	service.exports["phase3"] = 0
 	
 	service.calculateAndSetAmps()
 	assert.True(t, service.isCharging, "Should not stop immediately")
@@ -82,5 +83,5 @@ func TestDawnConsumer_PVStopCondition(t *testing.T) {
 	// 2. Fast forward time (6 minutes later)
 	service.pvShortageStartTime = time.Now().Add(-6 * time.Minute)
 	service.calculateAndSetAmps()
-	assert.False(t, service.isCharging, "Should stop after 5 minutes of sustained shortage")
+	assert.False(t, service.isCharging, "Should stop after 5 minutes of sustained grid import")
 }
