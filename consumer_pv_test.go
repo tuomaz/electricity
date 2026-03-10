@@ -70,8 +70,8 @@ func TestDawnConsumer_PVStopCondition(t *testing.T) {
 		pid:             &PIDController{},
 	}
 
-	// 1. Grid import detected (0.5A on phase 1)
-	service.currents["phase1"] = 0.5
+	// 1. Grid import detected (1.1A on phase 1)
+	service.currents["phase1"] = 1.1
 	service.exports["phase1"] = 0
 	service.exports["phase2"] = 0
 	service.exports["phase3"] = 0

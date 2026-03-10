@@ -39,7 +39,7 @@ This feature allows the service to dynamically adjust the EV charging load to ma
 
 #### Stop Condition (PV-Only Mode)
 - The charger is currently **ON** and at its minimum setting (**6A**).
-- If **any phase** starts **importing** energy from the grid (i.e., `Import > 0.1A`) for a sustained period of **5 minutes**, the charger is turned **OFF**.
+- If **any phase** starts **importing** energy from the grid (i.e., `Import > 1.0A`) for a sustained period of **5 minutes**, the charger is turned **OFF**.
 - This ensures that if household loads increase or solar production decreases beyond the charger's ability to throttle down, we stop charging to avoid grid costs.
 
 ## Technical Implementation Steps

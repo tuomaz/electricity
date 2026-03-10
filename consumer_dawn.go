@@ -221,8 +221,8 @@ func (tc *dawnConsumerService) calculateAndSetAmps() {
 
 	// 3. PV SHORTAGE STOP LOGIC
 	if tc.pvOnlyMode && tc.isCharging {
-		// Stop if importing on any phase (> 0.1A) while at minimum charging
-		if maxPhaseCurrent > 0.1 && tc.currentAmps <= tc.minimumAmps {
+		// Stop if importing on any phase (> 1.0A) while at minimum charging
+		if maxPhaseCurrent > 1.0 && tc.currentAmps <= tc.minimumAmps {
 			if tc.pvShortageStartTime.IsZero() {
 				tc.pvShortageStartTime = time.Now()
 				log.Printf("DAWN: PV shortage (grid import detected: %.2fA) at minimum charging. Starting 5m shutdown timer.", maxPhaseCurrent)
