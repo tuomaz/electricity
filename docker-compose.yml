@@ -9,4 +9,6 @@ services:
       AREA: "SE2"
       DAWN: "number.dawn_maximum_current"
       DAWN_SWITCH: "switch.dawn_charging"
+      DAWN_CURRENT: "sensor.dawn_actual_current"
+      PV_ONLY_SWITCH: "input_boolean.pv_only_charging"
       NOTIFY_DEVICE: "mobile_app_your_device"

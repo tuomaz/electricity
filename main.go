@@ -29,14 +29,18 @@ func main() {
 	signal.Notify(sigs, syscall.SIGINT, syscall.SIGTERM)
 	go signalHandler(cancel, sigs)
 
-	haUri, haToken, area, dawn, dawnSwitch, notifyDevice, dawnCurrent := readEnv()
+	haUri, haToken, area, dawn, dawnSwitch, notifyDevice, dawnCurrent, pvOnlySwitchId, phase1, phase2, phase3, export1, export2, export3, voltage1, voltage2, voltage3 := readEnv()
 
 	events := make(chan *event)
 
 	haService := newHaService(ctx, haUri, haToken, notifyDevice)
-	_ = newPowerService(ctx, events, haService, "sensor.current_phase_1", "sensor.current_phase_2", "sensor.current_phase_3", MAX_PHASE_CURRENT)
+	_ = newPowerService(ctx, events, haService,
+		phase1, phase2, phase3,
+		export1, export2, export3,
+		voltage1, voltage2, voltage3,
+		MAX_PHASE_CURRENT)
 	priceService := newPriceService(area)
-	dawnService := newDawnConsumerService(ctx, events, haService, "sensor.dawn_status_connector", dawn, dawnSwitch, notifyDevice, dawnCurrent, MAX_PHASE_CURRENT)
+	dawnService := newDawnConsumerService(ctx, events, haService, "sensor.dawn_status_connector", dawn, dawnSwitch, notifyDevice, dawnCurrent, MAX_PHASE_CURRENT, pvOnlySwitchId)
 
 	// TODO: move this inside service
 	s := gocron.NewScheduler(time.UTC)
@@ -61,7 +65,7 @@ MainLoop:
 		case event, ok := <-events:
 			if ok {
 				if event.powerEvent != nil {
-					dawnService.updateCurrents(event.powerEvent.phase, event.powerEvent.current)
+					dawnService.updateCurrents(event.powerEvent)
 				}
 			} else {
 				break MainLoop
@@ -72,8 +76,10 @@ MainLoop:
 	s.Remove(job)
 }
 
-func readEnv() (string, string, string, string, string, string, string) {
-	var haURI, haToken, area, dawn, dawnSwitch, notifyDevice, dawnCurrent string
+func readEnv() (string, string, string, string, string, string, string, string, string, string, string, string, string, string, string, string, string) {
+	var haURI, haToken, area, dawn, dawnSwitch, notifyDevice, dawnCurrent, pvOnlySwitch string
+	var phase1, phase2, phase3, export1, export2, export3, voltage1, voltage2, voltage3 string
+
 	value, ok := os.LookupEnv("HAURI")
 	if ok {
 		haURI = strings.TrimSpace(value)
@@ -123,5 +129,36 @@ func readEnv() (string, string, string, string, string, string, string) {
 		log.Fatalf("no Dawn current sensor found")
 	}
 
-	return haURI, haToken, area, dawn, dawnSwitch, notifyDevice, dawnCurrent
+	value, ok = os.LookupEnv("PV_ONLY_SWITCH")
+	if ok {
+		pvOnlySwitch = strings.TrimSpace(value)
+	} else {
+		log.Fatalf("no PV only switch found")
+	}
+
+	// Phase Currents
+	phase1 = getEnvOrDefault("PHASE_1_CURRENT", "sensor.current_phase_1")
+	phase2 = getEnvOrDefault("PHASE_2_CURRENT", "sensor.current_phase_2")
+	phase3 = getEnvOrDefault("PHASE_3_CURRENT", "sensor.current_phase_3")
+
+	// Export Sensors
+	export1 = getEnvOrDefault("PHASE_1_EXPORT", "sensor.momentary_active_export_phase_1")
+	export2 = getEnvOrDefault("PHASE_2_EXPORT", "sensor.momentary_active_export_phase_2")
+	export3 = getEnvOrDefault("PHASE_3_EXPORT", "sensor.momentary_active_export_phase_3")
+
+	// Voltage Sensors
+	voltage1 = getEnvOrDefault("PHASE_1_VOLTAGE", "sensor.voltage_phase_1")
+	voltage2 = getEnvOrDefault("PHASE_2_VOLTAGE", "sensor.voltage_phase_2")
+	voltage3 = getEnvOrDefault("PHASE_3_VOLTAGE", "sensor.voltage_phase_3")
+
+	return haURI, haToken, area, dawn, dawnSwitch, notifyDevice, dawnCurrent, pvOnlySwitch,
+		phase1, phase2, phase3, export1, export2, export3, voltage1, voltage2, voltage3
+}
+
+func getEnvOrDefault(key, defaultValue string) string {
+	value, ok := os.LookupEnv(key)
+	if !ok {
+		return defaultValue
+	}
+	return strings.TrimSpace(value)
 }

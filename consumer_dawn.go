@@ -6,6 +6,7 @@ import (
 	"log"
 	"math"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/tuomaz/gohaws"
@@ -14,6 +15,7 @@ import (
 type dawnConsumerService struct {
 	ctx                  context.Context
 	haService            *haService
+	mu                   sync.RWMutex
 	currentAmps          float64 // The setting we have requested
 	actualAmps           float64 // What the car is actually drawing
 	minimumAmps          float64
@@ -24,19 +26,24 @@ type dawnConsumerService struct {
 	dawnSwitch           string
 	notifyDevice         string
 	dawnCurrentId        string
+	pvOnlySwitchId       string
 	currents             map[string]float64
+	exports              map[string]float64
 	pid                  *PIDController
 	setpoint             float64
 	overcurrentStartTime time.Time
+	pvShortageStartTime  time.Time
+	pvSurplusStartTime   time.Time
 	isCharging           bool
+	pvOnlyMode           bool
 	connectorStatus      string
 	lastExecution        time.Time
 	lastHardSafetyEvent  time.Time
 }
 
-func newDawnConsumerService(ctx context.Context, eventChannel chan *event, ha *haService, statusSensor string, dawnId string, dawnSwitch string, notifyDevice string, dawnCurrentId string, setpoint float64) *dawnConsumerService {
+func newDawnConsumerService(ctx context.Context, eventChannel chan *event, ha *haService, statusSensor string, dawnId string, dawnSwitch string, notifyDevice string, dawnCurrentId string, setpoint float64, pvOnlySwitchId string) *dawnConsumerService {
 	haChannel := make(chan *gohaws.Message)
-	ha.subscribeMulti([]string{statusSensor, dawnCurrentId}, haChannel)
+	ha.subscribeMulti([]string{statusSensor, dawnCurrentId, pvOnlySwitchId}, haChannel)
 
 	pid := &PIDController{
 		Kp:       0.4,
@@ -46,21 +53,23 @@ func newDawnConsumerService(ctx context.Context, eventChannel chan *event, ha *h
 	}
 
 	dawnConsumerService := &dawnConsumerService{
-		ctx:           ctx,
-		haService:     ha,
-		minimumAmps:   6,
-		maximumAmps:   16,
-		currentAmps:   6,
-		actualAmps:    0,
-		haChannel:     haChannel,
-		dawnId:        dawnId,
-		dawnSwitch:    dawnSwitch,
-		notifyDevice:  notifyDevice,
-		dawnCurrentId: dawnCurrentId,
-		currents:      make(map[string]float64),
-		pid:           pid,
-		setpoint:      setpoint,
-		lastExecution: time.Now(),
+		ctx:            ctx,
+		haService:      ha,
+		minimumAmps:    6,
+		maximumAmps:    16,
+		currentAmps:    6,
+		actualAmps:     0,
+		haChannel:      haChannel,
+		dawnId:         dawnId,
+		dawnSwitch:     dawnSwitch,
+		notifyDevice:   notifyDevice,
+		dawnCurrentId:  dawnCurrentId,
+		pvOnlySwitchId: pvOnlySwitchId,
+		currents:       make(map[string]float64),
+		exports:        make(map[string]float64),
+		pid:            pid,
+		setpoint:       setpoint,
+		lastExecution:  time.Now(),
 	}
 
 	go dawnConsumerService.run()
@@ -78,12 +87,27 @@ Loop:
 			if ok {
 				if message.Event.Data.EntityID == ps.dawnCurrentId {
 					totalAmps := parseFloat(message.Event.Data.NewState.State)
+					ps.mu.Lock()
 					// Divide by 3 because the sensor is a sum of all 3 phases
 					ps.actualAmps = totalAmps / 3.0
-					//log.Printf("DAWN: total draw %.2fA -> per-phase draw: %.2fA", totalAmps, ps.actualAmps)
+					ps.mu.Unlock()
+				} else if message.Event.Data.EntityID == ps.pvOnlySwitchId {
+					state := strings.ToLower(fmt.Sprintf("%v", message.Event.Data.NewState.State))
+					ps.mu.Lock()
+					oldMode := ps.pvOnlyMode
+					ps.pvOnlyMode = state == "on"
+					if oldMode != ps.pvOnlyMode {
+						log.Printf("DAWN: PV-only mode changed: %v -> %v. Resetting PID.", oldMode, ps.pvOnlyMode)
+						ps.pid.Integral = 0
+						ps.pid.LastError = 0
+						ps.pid.LastTime = time.Time{}
+					}
+					ps.mu.Unlock()
 				} else {
 					state := strings.ToLower(fmt.Sprintf("%v", message.Event.Data.NewState.State))
+					ps.mu.Lock()
 					ps.connectorStatus = state
+					ps.mu.Unlock()
 					log.Printf("DAWN: connector status: %s", state)
 				}
 			} else {
@@ -93,12 +117,28 @@ Loop:
 	}
 }
 
-func (tc *dawnConsumerService) updateCurrents(phase string, amps float64) {
-	tc.currents[phase] = amps
+func (tc *dawnConsumerService) updateCurrents(pe *powerEvent) {
+	phaseKey := fmt.Sprintf("phase%d", pe.phaseIndex)
+
+	tc.mu.Lock()
+	if pe.sensorType == SensorTypeExport {
+		tc.exports[phaseKey] = pe.value
+		// If we are exporting, import current is 0
+		tc.currents[phaseKey] = 0
+	} else if pe.sensorType == SensorTypeCurrent {
+		tc.currents[phaseKey] = pe.value
+		// If we are importing, export current is 0
+		tc.exports[phaseKey] = 0
+	}
+	tc.mu.Unlock()
+
 	tc.calculateAndSetAmps()
 }
 
 func (tc *dawnConsumerService) isActuallyCharging() bool {
+	tc.mu.RLock()
+	defer tc.mu.RUnlock()
+
 	if !tc.isCharging {
 		return false
 	}
@@ -114,28 +154,49 @@ func (tc *dawnConsumerService) isActuallyCharging() bool {
 }
 
 func (tc *dawnConsumerService) calculateAndSetAmps() {
-	maxPhaseCurrent := tc.getMaxCurrent()
-	if maxPhaseCurrent == 0 {
-		return
-	}
+	tc.mu.Lock()
+	defer tc.mu.Unlock()
+
+	maxPhaseCurrent := tc.getMaxCurrentInternal()
+	minPhaseExport := tc.getMinExportInternal()
 
 	// 1. RESTART LOGIC
 	if !tc.isCharging {
-		if maxPhaseCurrent <= tc.setpoint-8.0 {
-			msg := fmt.Sprintf("Sufficient headroom (%.2fA). Restarting EV charging.", tc.setpoint-maxPhaseCurrent)
-			log.Printf("DAWN: %s", msg)
-			tc.haService.sendNotification(msg, tc.notifyDevice)
+		canStart := false
+		if tc.pvOnlyMode {
+			// PV-Only Start Condition: All 3 phases must export >= 6A
+			if minPhaseExport >= tc.minimumAmps {
+				if tc.pvSurplusStartTime.IsZero() {
+					tc.pvSurplusStartTime = time.Now()
+					log.Printf("DAWN: PV surplus detected (%.2fA). Starting 5m stabilization timer.", minPhaseExport)
+				} else if time.Since(tc.pvSurplusStartTime) > 5*time.Minute {
+					canStart = true
+					log.Printf("DAWN: PV surplus sustained for 5m. Starting EV charging.")
+				}
+			} else {
+				tc.pvSurplusStartTime = time.Time{}
+			}
+		} else {
+			// Normal Start Condition: Sufficient headroom
+			if maxPhaseCurrent > 0 && maxPhaseCurrent <= tc.setpoint-8.0 {
+				canStart = true
+				log.Printf("DAWN: Sufficient headroom (%.2fA). Starting EV charging.", tc.setpoint-maxPhaseCurrent)
+			}
+		}
 
+		if canStart {
 			tc.isCharging = true
 			tc.haService.setDawnSwitch(true, tc.dawnSwitch)
-			tc.setAmps(tc.minimumAmps)
+			tc.setAmpsInternal(tc.minimumAmps)
 			tc.pid.Integral = 0
 			tc.overcurrentStartTime = time.Time{}
+			tc.pvSurplusStartTime = time.Time{}
+			tc.pvShortageStartTime = time.Time{}
 		}
 		return
 	}
 
-	// 2. HARD SAFETY OVERRIDE
+	// 2. HARD SAFETY OVERRIDE (Fuses)
 	hardSafetyThreshold := tc.setpoint + 2.0
 	if maxPhaseCurrent > hardSafetyThreshold && time.Since(tc.lastHardSafetyEvent) > 5*time.Second {
 		// BASELINE: Use Actual Draw if it's lower than our current setting
@@ -153,21 +214,18 @@ func (tc *dawnConsumerService) calculateAndSetAmps() {
 				log.Printf("DAWN: %s", msg)
 				tc.haService.sendNotification(msg, tc.notifyDevice)
 
-				tc.isCharging = false
-				tc.haService.setDawnSwitch(false, tc.dawnSwitch)
-				tc.overcurrentStartTime = time.Time{}
+				tc.stopChargingInternal()
 				return
 			}
 		} else {
 			overage := maxPhaseCurrent - tc.setpoint
 			reduction := math.Ceil(overage)
-			
-			// We reduce from the ACTUAL draw, not the theoretical target
+
 			newAmps := math.Max(tc.minimumAmps, baseline-reduction)
 
 			if int(newAmps) != int(tc.currentAmps) {
 				log.Printf("DAWN: HARD SAFETY REDUCTION! Max phase %.2fA. Car drawing %.2fA. Reducing setting %vA -> %vA", maxPhaseCurrent, tc.actualAmps, int(tc.currentAmps), int(newAmps))
-				tc.setAmps(newAmps)
+				tc.setAmpsInternal(newAmps)
 				tc.pid.Integral = 0
 				tc.lastHardSafetyEvent = time.Now()
 				tc.lastExecution = time.Now()
@@ -175,10 +233,26 @@ func (tc *dawnConsumerService) calculateAndSetAmps() {
 		}
 		return
 	}
-
 	tc.overcurrentStartTime = time.Time{}
 
-	// 3. THROTTLE & LOCKOUT
+	// 3. PV SHORTAGE STOP LOGIC
+	if tc.pvOnlyMode && tc.isCharging {
+		// Stop if importing on any phase (> 1.0A) while at minimum charging
+		if maxPhaseCurrent > 1.0 && tc.currentAmps <= tc.minimumAmps {
+			if tc.pvShortageStartTime.IsZero() {
+				tc.pvShortageStartTime = time.Now()
+				log.Printf("DAWN: PV shortage (grid import detected: %.2fA) at minimum charging. Starting 5m shutdown timer.", maxPhaseCurrent)
+			} else if time.Since(tc.pvShortageStartTime) > 5*time.Minute {
+				log.Printf("DAWN: PV shortage sustained for 5m. Stopping EV charging to avoid grid costs.")
+				tc.stopChargingInternal()
+				return
+			}
+		} else {
+			tc.pvShortageStartTime = time.Time{}
+		}
+	}
+
+	// 4. THROTTLE & LOCKOUT
 	if time.Since(tc.lastExecution) < 20*time.Second {
 		return
 	}
@@ -186,13 +260,42 @@ func (tc *dawnConsumerService) calculateAndSetAmps() {
 		return
 	}
 
-	// 4. CHECK IF ADJUSTMENT IS NEEDED
-	if !tc.isActuallyCharging() {
+	// 5. CHECK IF ADJUSTMENT IS NEEDED
+	// Inline isActuallyCharging logic here to avoid deadlocks since we already hold the lock
+	actuallyCharging := false
+	if tc.isCharging {
+		switch tc.connectorStatus {
+		case "charging", "3", "busy", "connected", "2", "awaiting start":
+			actuallyCharging = true
+		}
+	}
+
+	if !actuallyCharging {
 		return
 	}
 
-	// 5. OPTIMIZATION LAYER (PID)
-	adjustment := tc.pid.Update(maxPhaseCurrent)
+	// 6. OPTIMIZATION LAYER (PID)
+	var input float64
+	var currentSetpoint float64
+
+	if tc.pvOnlyMode {
+		currentSetpoint = 0.5
+		input = minPhaseExport
+		if minPhaseExport == 0 {
+			input = -maxPhaseCurrent
+		}
+	} else {
+		currentSetpoint = tc.setpoint
+		input = maxPhaseCurrent
+	}
+
+	tc.pid.Setpoint = currentSetpoint
+	adjustment := tc.pid.Update(input)
+
+	if tc.pvOnlyMode {
+		adjustment = -adjustment
+	}
+
 	targetAmps := tc.currentAmps + adjustment
 
 	if targetAmps < tc.minimumAmps {
@@ -203,20 +306,68 @@ func (tc *dawnConsumerService) calculateAndSetAmps() {
 	}
 
 	if int(targetAmps) != int(tc.currentAmps) {
-		log.Printf("DAWN: PID Adjustment %vA -> %vA (Max Phase: %.2fA, Actual Draw: %.2fA)", int(tc.currentAmps), int(targetAmps), maxPhaseCurrent, tc.actualAmps)
-		tc.setAmps(targetAmps)
+		modeStr := "NORMAL"
+		if tc.pvOnlyMode {
+			modeStr = "PV-ONLY"
+		}
+		log.Printf("DAWN: %s PID Adjustment %vA -> %vA (Max Phase: %.2fA, Min Export: %.2fA, Actual Draw: %.2fA)", modeStr, int(tc.currentAmps), int(targetAmps), maxPhaseCurrent, minPhaseExport, tc.actualAmps)
+		tc.setAmpsInternal(targetAmps)
 	} else {
 		tc.currentAmps = targetAmps
 	}
 	tc.lastExecution = time.Now()
 }
 
+func (tc *dawnConsumerService) stopCharging() {
+	tc.mu.Lock()
+	defer tc.mu.Unlock()
+	tc.stopChargingInternal()
+}
+
+func (tc *dawnConsumerService) stopChargingInternal() {
+	tc.isCharging = false
+	tc.haService.setDawnSwitch(false, tc.dawnSwitch)
+	tc.overcurrentStartTime = time.Time{}
+	tc.pvShortageStartTime = time.Time{}
+}
+
+func (tc *dawnConsumerService) getMinExport() float64 {
+	tc.mu.RLock()
+	defer tc.mu.RUnlock()
+	return tc.getMinExportInternal()
+}
+
+func (tc *dawnConsumerService) getMinExportInternal() float64 {
+	min := 999.0
+	if len(tc.exports) < 3 {
+		return 0
+	}
+	for _, value := range tc.exports {
+		if value < min {
+			min = value
+		}
+	}
+	return min
+}
+
 func (tc *dawnConsumerService) setAmps(amps float64) {
+	tc.mu.Lock()
+	defer tc.mu.Unlock()
+	tc.setAmpsInternal(amps)
+}
+
+func (tc *dawnConsumerService) setAmpsInternal(amps float64) {
 	tc.currentAmps = amps
 	tc.haService.updateAmpsDawn(int(tc.currentAmps), tc.dawnId)
 }
 
 func (tc *dawnConsumerService) getMaxCurrent() float64 {
+	tc.mu.RLock()
+	defer tc.mu.RUnlock()
+	return tc.getMaxCurrentInternal()
+}
+
+func (tc *dawnConsumerService) getMaxCurrentInternal() float64 {
 	max := 0.0
 	for _, value := range tc.currents {
 		if value > max {
