@@ -9,6 +9,7 @@ type SensorType int
 
 const (
 	SensorTypeCurrent SensorType = iota
+	SensorTypeImport
 	SensorTypeExport
 	SensorTypeVoltage
 )

@@ -103,6 +103,7 @@ Loop:
 						ps.pid.LastTime = time.Time{}
 					}
 					ps.mu.Unlock()
+					ps.calculateAndSetAmps()
 				} else {
 					state := strings.ToLower(fmt.Sprintf("%v", message.Event.Data.NewState.State))
 					ps.mu.Lock()
@@ -125,10 +126,16 @@ func (tc *dawnConsumerService) updateCurrents(pe *powerEvent) {
 		tc.exports[phaseKey] = pe.value
 		// If we are exporting, import current is 0
 		tc.currents[phaseKey] = 0
-	} else if pe.sensorType == SensorTypeCurrent {
+	} else if pe.sensorType == SensorTypeImport {
 		tc.currents[phaseKey] = pe.value
 		// If we are importing, export current is 0
 		tc.exports[phaseKey] = 0
+	} else if pe.sensorType == SensorTypeCurrent {
+		// Use absolute current sensor as a fallback or for fuse protection
+		// but ONLY if we haven't seen an explicit import/export update for this phase yet.
+		if tc.exports[phaseKey] <= 0.1 && tc.currents[phaseKey] <= 0.1 {
+			tc.currents[phaseKey] = pe.value
+		}
 	}
 	tc.mu.Unlock()
 
@@ -163,6 +170,7 @@ func (tc *dawnConsumerService) calculateAndSetAmps() {
 	// 1. RESTART LOGIC
 	if !tc.isCharging {
 		canStart := false
+
 		if tc.pvOnlyMode {
 			// PV-Only Start Condition: All 3 phases must export >= 6A
 			if minPhaseExport >= tc.minimumAmps {
