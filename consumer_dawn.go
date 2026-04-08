@@ -165,18 +165,18 @@ func (tc *dawnConsumerService) calculateAndSetAmps() {
 	defer tc.mu.Unlock()
 
 	maxPhaseCurrent := tc.getMaxCurrentInternal()
-	minPhaseExport := tc.getMinExportInternal()
+	netExport := tc.getNetExportInternal()
 
 	// 1. RESTART LOGIC
 	if !tc.isCharging {
 		canStart := false
 
 		if tc.pvOnlyMode {
-			// PV-Only Start Condition: All 3 phases must export >= 6A
-			if minPhaseExport >= tc.minimumAmps {
+			// PV-Only Start Condition: Total net export must be >= 18A (assuming 3-phase 6A start)
+			if netExport >= tc.minimumAmps*3.0 {
 				if tc.pvSurplusStartTime.IsZero() {
 					tc.pvSurplusStartTime = time.Now()
-					log.Printf("DAWN: PV surplus detected (%.2fA). Starting 5m stabilization timer.", minPhaseExport)
+					log.Printf("DAWN: PV surplus detected (Net: %.2fA). Starting 5m stabilization timer.", netExport)
 				} else if time.Since(tc.pvSurplusStartTime) > 5*time.Minute {
 					canStart = true
 					log.Printf("DAWN: PV surplus sustained for 5m. Starting EV charging.")
@@ -205,6 +205,7 @@ func (tc *dawnConsumerService) calculateAndSetAmps() {
 	}
 
 	// 2. HARD SAFETY OVERRIDE (Fuses)
+	// IMPORTANT: Fuses are per-phase, so we still use maxPhaseCurrent here!
 	hardSafetyThreshold := tc.setpoint + 2.0
 	if maxPhaseCurrent > hardSafetyThreshold && time.Since(tc.lastHardSafetyEvent) > 5*time.Second {
 		// BASELINE: Use Actual Draw if it's lower than our current setting
@@ -245,11 +246,12 @@ func (tc *dawnConsumerService) calculateAndSetAmps() {
 
 	// 3. PV SHORTAGE STOP LOGIC
 	if tc.pvOnlyMode && tc.isCharging {
-		// Stop if importing on any phase (> 1.0A) while at minimum charging
-		if maxPhaseCurrent > 1.0 && tc.currentAmps <= tc.minimumAmps {
+		// Stop if net importing (> 3.0A) while at minimum charging
+		// Using 3.0A as a buffer (1.0A per phase average)
+		if netExport < -3.0 && tc.currentAmps <= tc.minimumAmps {
 			if tc.pvShortageStartTime.IsZero() {
 				tc.pvShortageStartTime = time.Now()
-				log.Printf("DAWN: PV shortage (grid import detected: %.2fA) at minimum charging. Starting 5m shutdown timer.", maxPhaseCurrent)
+				log.Printf("DAWN: PV shortage (Net Import: %.2fA) at minimum charging. Starting 5m shutdown timer.", -netExport)
 			} else if time.Since(tc.pvShortageStartTime) > 5*time.Minute {
 				log.Printf("DAWN: PV shortage sustained for 5m. Stopping EV charging to avoid grid costs.")
 				tc.stopChargingInternal()
@@ -288,10 +290,8 @@ func (tc *dawnConsumerService) calculateAndSetAmps() {
 
 	if tc.pvOnlyMode {
 		currentSetpoint = 0.5
-		input = minPhaseExport
-		if minPhaseExport == 0 {
-			input = -maxPhaseCurrent
-		}
+		// Input is "average per-phase export"
+		input = netExport / 3.0
 	} else {
 		currentSetpoint = tc.setpoint
 		input = maxPhaseCurrent
@@ -318,7 +318,7 @@ func (tc *dawnConsumerService) calculateAndSetAmps() {
 		if tc.pvOnlyMode {
 			modeStr = "PV-ONLY"
 		}
-		log.Printf("DAWN: %s PID Adjustment %vA -> %vA (Max Phase: %.2fA, Min Export: %.2fA, Actual Draw: %.2fA)", modeStr, int(tc.currentAmps), int(targetAmps), maxPhaseCurrent, minPhaseExport, tc.actualAmps)
+		log.Printf("DAWN: %s PID Adjustment %vA -> %vA (Max Phase: %.2fA, Net Export: %.2fA, Actual Draw: %.2fA)", modeStr, int(tc.currentAmps), int(targetAmps), maxPhaseCurrent, netExport, tc.actualAmps)
 		tc.setAmpsInternal(targetAmps)
 	} else {
 		tc.currentAmps = targetAmps
@@ -356,6 +356,16 @@ func (tc *dawnConsumerService) getMinExportInternal() float64 {
 		}
 	}
 	return min
+}
+
+func (tc *dawnConsumerService) getNetExportInternal() float64 {
+	net := 0.0
+	for i := 1; i <= 3; i++ {
+		phaseKey := fmt.Sprintf("phase%d", i)
+		net += tc.exports[phaseKey]
+		net -= tc.currents[phaseKey]
+	}
+	return net
 }
 
 func (tc *dawnConsumerService) setAmps(amps float64) {
