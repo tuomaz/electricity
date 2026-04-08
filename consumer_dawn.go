@@ -27,10 +27,13 @@ type dawnConsumerService struct {
 	notifyDevice         string
 	dawnCurrentId        string
 	pvOnlySwitchId       string
+	priceLimitEntity     string
 	currents             map[string]float64
 	exports              map[string]float64
 	pid                  *PIDController
 	setpoint             float64
+	currentPrice         float64
+	currentPriceLimit    float64
 	overcurrentStartTime time.Time
 	pvShortageStartTime  time.Time
 	pvSurplusStartTime   time.Time
@@ -41,9 +44,9 @@ type dawnConsumerService struct {
 	lastHardSafetyEvent  time.Time
 }
 
-func newDawnConsumerService(ctx context.Context, eventChannel chan *event, ha *haService, statusSensor string, dawnId string, dawnSwitch string, notifyDevice string, dawnCurrentId string, setpoint float64, pvOnlySwitchId string) *dawnConsumerService {
+func newDawnConsumerService(ctx context.Context, eventChannel chan *event, ha *haService, statusSensor string, dawnId string, dawnSwitch string, notifyDevice string, dawnCurrentId string, setpoint float64, pvOnlySwitchId string, priceLimitEntity string) *dawnConsumerService {
 	haChannel := make(chan *gohaws.Message)
-	ha.subscribeMulti([]string{statusSensor, dawnCurrentId, pvOnlySwitchId}, haChannel)
+	ha.subscribeMulti([]string{statusSensor, dawnCurrentId, pvOnlySwitchId, priceLimitEntity}, haChannel)
 
 	pid := &PIDController{
 		Kp:       0.4,
@@ -65,6 +68,7 @@ func newDawnConsumerService(ctx context.Context, eventChannel chan *event, ha *h
 		notifyDevice:   notifyDevice,
 		dawnCurrentId:  dawnCurrentId,
 		pvOnlySwitchId: pvOnlySwitchId,
+		priceLimitEntity: priceLimitEntity,
 		currents:       make(map[string]float64),
 		exports:        make(map[string]float64),
 		pid:            pid,
@@ -103,6 +107,12 @@ Loop:
 						ps.pid.LastTime = time.Time{}
 					}
 					ps.mu.Unlock()
+				} else if message.Event.Data.EntityID == ps.priceLimitEntity {
+					limit := parseFloat(message.Event.Data.NewState.State)
+					ps.mu.Lock()
+					ps.currentPriceLimit = limit
+					ps.mu.Unlock()
+					log.Printf("DAWN: price limit updated: %.2f", limit)
 				} else {
 					state := strings.ToLower(fmt.Sprintf("%v", message.Event.Data.NewState.State))
 					ps.mu.Lock()
@@ -115,6 +125,13 @@ Loop:
 			}
 		}
 	}
+}
+
+func (tc *dawnConsumerService) UpdatePrice(price float64) {
+	tc.mu.Lock()
+	tc.currentPrice = price
+	tc.mu.Unlock()
+	tc.calculateAndSetAmps()
 }
 
 func (tc *dawnConsumerService) updateCurrents(pe *powerEvent) {
@@ -163,6 +180,13 @@ func (tc *dawnConsumerService) calculateAndSetAmps() {
 	// 1. RESTART LOGIC
 	if !tc.isCharging {
 		canStart := false
+		
+		// Check price limit first (unless in PV-only mode)
+		priceOk := true
+		if !tc.pvOnlyMode && tc.currentPriceLimit > 0 && tc.currentPrice > tc.currentPriceLimit {
+			priceOk = false
+		}
+
 		if tc.pvOnlyMode {
 			// PV-Only Start Condition: All 3 phases must export >= 6A
 			if minPhaseExport >= tc.minimumAmps {
@@ -176,11 +200,11 @@ func (tc *dawnConsumerService) calculateAndSetAmps() {
 			} else {
 				tc.pvSurplusStartTime = time.Time{}
 			}
-		} else {
-			// Normal Start Condition: Sufficient headroom
+		} else if priceOk {
+			// Normal Start Condition: Sufficient headroom AND price is OK
 			if maxPhaseCurrent > 0 && maxPhaseCurrent <= tc.setpoint-8.0 {
 				canStart = true
-				log.Printf("DAWN: Sufficient headroom (%.2fA). Starting EV charging.", tc.setpoint-maxPhaseCurrent)
+				log.Printf("DAWN: Sufficient headroom (%.2fA) and price OK (%.2f). Starting EV charging.", tc.setpoint-maxPhaseCurrent, tc.currentPrice)
 			}
 		}
 
@@ -235,7 +259,16 @@ func (tc *dawnConsumerService) calculateAndSetAmps() {
 	}
 	tc.overcurrentStartTime = time.Time{}
 
-	// 3. PV SHORTAGE STOP LOGIC
+	// 3. PRICE STOP LOGIC
+	if !tc.pvOnlyMode && tc.currentPriceLimit > 0 && tc.currentPrice > tc.currentPriceLimit {
+		msg := fmt.Sprintf("Price limit exceeded (%.2f > %.2f). Stopping EV charging.", tc.currentPrice, tc.currentPriceLimit)
+		log.Printf("DAWN: %s", msg)
+		tc.haService.sendNotification(msg, tc.notifyDevice)
+		tc.stopChargingInternal()
+		return
+	}
+
+	// 4. PV SHORTAGE STOP LOGIC
 	if tc.pvOnlyMode && tc.isCharging {
 		// Stop if importing on any phase (> 1.0A) while at minimum charging
 		if maxPhaseCurrent > 1.0 && tc.currentAmps <= tc.minimumAmps {
