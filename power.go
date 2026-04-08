@@ -17,6 +17,9 @@ type PowerService struct {
 	export1  string
 	export2  string
 	export3  string
+	import1  string
+	import2  string
+	import3  string
 	voltage1 string
 	voltage2 string
 	voltage3 string
@@ -27,9 +30,9 @@ type PowerService struct {
 	voltages     map[int]float64
 }
 
-func newPowerService(ctx context.Context, eventChannel chan *event, ha *haService, phase1 string, phase2 string, phase3 string, export1 string, export2 string, export3 string, voltage1 string, voltage2 string, voltage3 string, max float64) *PowerService {
+func newPowerService(ctx context.Context, eventChannel chan *event, ha *haService, phase1 string, phase2 string, phase3 string, export1 string, export2 string, export3 string, import1 string, import2 string, import3 string, voltage1 string, voltage2 string, voltage3 string, max float64) *PowerService {
 	haChannel := make(chan *gohaws.Message)
-	ha.subscribeMulti([]string{phase1, phase2, phase3, export1, export2, export3, voltage1, voltage2, voltage3}, haChannel)
+	ha.subscribeMulti([]string{phase1, phase2, phase3, export1, export2, export3, import1, import2, import3, voltage1, voltage2, voltage3}, haChannel)
 
 	powerService := &PowerService{
 		ctx:          ctx,
@@ -40,6 +43,9 @@ func newPowerService(ctx context.Context, eventChannel chan *event, ha *haServic
 		export1:      export1,
 		export2:      export2,
 		export3:      export3,
+		import1:      import1,
+		import2:      import2,
+		import3:      import3,
 		voltage1:     voltage1,
 		voltage2:     voltage2,
 		voltage3:     voltage3,
@@ -95,6 +101,21 @@ Loop:
 					recognized = true
 				case ps.export3:
 					powerEvent.sensorType = SensorTypeExport
+					powerEvent.phaseIndex = 3
+					powerEvent.value = (value * 1000.0) / ps.getVoltage(3)
+					recognized = true
+				case ps.import1:
+					powerEvent.sensorType = SensorTypeImport
+					powerEvent.phaseIndex = 1
+					powerEvent.value = (value * 1000.0) / ps.getVoltage(1)
+					recognized = true
+				case ps.import2:
+					powerEvent.sensorType = SensorTypeImport
+					powerEvent.phaseIndex = 2
+					powerEvent.value = (value * 1000.0) / ps.getVoltage(2)
+					recognized = true
+				case ps.import3:
+					powerEvent.sensorType = SensorTypeImport
 					powerEvent.phaseIndex = 3
 					powerEvent.value = (value * 1000.0) / ps.getVoltage(3)
 					recognized = true
