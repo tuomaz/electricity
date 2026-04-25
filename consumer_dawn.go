@@ -20,6 +20,7 @@ type dawnConsumerService struct {
 	actualAmps           float64 // What the car is actually drawing
 	minimumAmps          float64
 	maximumAmps          float64
+	userLimit            float64
 	haChannel            chan *gohaws.Message
 	eventChannel         chan *event
 	dawnId               string
@@ -27,6 +28,7 @@ type dawnConsumerService struct {
 	notifyDevice         string
 	dawnCurrentId        string
 	pvOnlySwitchId       string
+	userLimitId          string
 	currents             map[string]float64
 	exports              map[string]float64
 	pid                  *PIDController
@@ -41,9 +43,9 @@ type dawnConsumerService struct {
 	lastHardSafetyEvent  time.Time
 }
 
-func newDawnConsumerService(ctx context.Context, eventChannel chan *event, ha *haService, statusSensor string, dawnId string, dawnSwitch string, notifyDevice string, dawnCurrentId string, setpoint float64, pvOnlySwitchId string) *dawnConsumerService {
+func newDawnConsumerService(ctx context.Context, eventChannel chan *event, ha *haService, statusSensor string, dawnId string, dawnSwitch string, notifyDevice string, dawnCurrentId string, setpoint float64, pvOnlySwitchId string, userLimitId string) *dawnConsumerService {
 	haChannel := make(chan *gohaws.Message)
-	ha.subscribeMulti([]string{statusSensor, dawnCurrentId, pvOnlySwitchId}, haChannel)
+	ha.subscribeMulti([]string{statusSensor, dawnCurrentId, pvOnlySwitchId, userLimitId}, haChannel)
 
 	pid := &PIDController{
 		Kp:       0.4,
@@ -57,6 +59,7 @@ func newDawnConsumerService(ctx context.Context, eventChannel chan *event, ha *h
 		haService:      ha,
 		minimumAmps:    6,
 		maximumAmps:    16,
+		userLimit:      16,
 		currentAmps:    6,
 		actualAmps:     0,
 		haChannel:      haChannel,
@@ -65,6 +68,7 @@ func newDawnConsumerService(ctx context.Context, eventChannel chan *event, ha *h
 		notifyDevice:   notifyDevice,
 		dawnCurrentId:  dawnCurrentId,
 		pvOnlySwitchId: pvOnlySwitchId,
+		userLimitId:    userLimitId,
 		currents:       make(map[string]float64),
 		exports:        make(map[string]float64),
 		pid:            pid,
@@ -91,6 +95,15 @@ Loop:
 					// Divide by 3 because the sensor is a sum of all 3 phases
 					ps.actualAmps = totalAmps / 3.0
 					ps.mu.Unlock()
+				} else if message.Event.Data.EntityID == ps.userLimitId {
+					limit := parseFloat(message.Event.Data.NewState.State)
+					ps.mu.Lock()
+					if limit > 0 {
+						ps.userLimit = limit
+						log.Printf("DAWN: User limit updated: %.2fA", limit)
+					}
+					ps.mu.Unlock()
+					ps.calculateAndSetAmps()
 				} else if message.Event.Data.EntityID == ps.pvOnlySwitchId {
 					state := strings.ToLower(fmt.Sprintf("%v", message.Event.Data.NewState.State))
 					ps.mu.Lock()
@@ -311,6 +324,10 @@ func (tc *dawnConsumerService) calculateAndSetAmps() {
 	}
 	if targetAmps > tc.maximumAmps {
 		targetAmps = tc.maximumAmps
+	}
+
+	if tc.userLimit > 0 && targetAmps > tc.userLimit {
+		targetAmps = tc.userLimit
 	}
 
 	if int(targetAmps) != int(tc.currentAmps) {
