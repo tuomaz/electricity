@@ -166,6 +166,7 @@ func (tc *dawnConsumerService) calculateAndSetAmps() {
 
 	maxPhaseCurrent := tc.getMaxCurrentInternal()
 	minPhaseExport := tc.getMinExportInternal()
+	netExport := tc.getNetExportInternal()
 
 	// 1. RESTART LOGIC
 	if !tc.isCharging {
@@ -245,23 +246,28 @@ func (tc *dawnConsumerService) calculateAndSetAmps() {
 
 	// 3. PV SHORTAGE STOP LOGIC
 	if tc.pvOnlyMode && tc.isCharging {
-		// Stop if importing on any phase (> 1.0A) while at minimum charging
-		if maxPhaseCurrent > 1.0 && tc.currentAmps <= tc.minimumAmps {
+		// Stop if net importing (> 3.0A) while at minimum charging
+		// Using 3.0A as a buffer (1.0A per phase average)
+		if netExport < -3.0 && tc.currentAmps <= tc.minimumAmps {
 			if tc.pvShortageStartTime.IsZero() {
 				tc.pvShortageStartTime = time.Now()
-				log.Printf("DAWN: PV shortage (grid import detected: %.2fA) at minimum charging. Starting 5m shutdown timer.", maxPhaseCurrent)
+				log.Printf("DAWN: PV shortage (Net Import: %.2fA) at minimum charging. Starting 5m shutdown timer.", -netExport)
 			} else if time.Since(tc.pvShortageStartTime) > 5*time.Minute {
 				log.Printf("DAWN: PV shortage sustained for 5m. Stopping EV charging to avoid grid costs.")
 				tc.stopChargingInternal()
 				return
 			}
-		} else {
-			tc.pvShortageStartTime = time.Time{}
+		} else if netExport > -1.0 || tc.currentAmps > tc.minimumAmps {
+			// Only reset the timer if we clearly have surplus or are no longer at minimum charging
+			if !tc.pvShortageStartTime.IsZero() {
+				log.Printf("DAWN: PV shortage resolved (Net Export: %.2fA). Resetting shutdown timer.", netExport)
+				tc.pvShortageStartTime = time.Time{}
+			}
 		}
 	}
 
 	// 4. THROTTLE & LOCKOUT
-	if time.Since(tc.lastExecution) < 20*time.Second {
+	if time.Since(tc.lastExecution) < 30*time.Second {
 		return
 	}
 	if time.Since(tc.lastHardSafetyEvent) < 60*time.Second {
@@ -383,4 +389,14 @@ func (tc *dawnConsumerService) getMaxCurrentInternal() float64 {
 		}
 	}
 	return max
+}
+
+func (tc *dawnConsumerService) getNetExportInternal() float64 {
+	net := 0.0
+	for i := 1; i <= 3; i++ {
+		phaseKey := fmt.Sprintf("phase%d", i)
+		net += tc.exports[phaseKey]
+		net -= tc.currents[phaseKey]
+	}
+	return net
 }

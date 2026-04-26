@@ -65,6 +65,7 @@ func TestDawnConsumer_PVStopCondition(t *testing.T) {
 		pvOnlyMode:      true,
 		minimumAmps:     6.0,
 		currentAmps:     6.0,
+		setpoint:        20.0,
 		exports:         map[string]float64{"phase1": 0, "phase2": 0, "phase3": 0},
 		currents:        map[string]float64{"phase1": 0, "phase2": 0, "phase3": 0},
 		haService:       &haService{},
@@ -72,8 +73,8 @@ func TestDawnConsumer_PVStopCondition(t *testing.T) {
 		pid:             &PIDController{},
 	}
 
-	// 1. Grid import detected (1.1A on phase 1)
-	service.updateCurrents(&powerEvent{sensorType: SensorTypeImport, phaseIndex: 1, value: 1.1})
+	// 1. Grid import detected (4.0A on phase 1 -> Net Export -4.0)
+	service.updateCurrents(&powerEvent{sensorType: SensorTypeImport, phaseIndex: 1, value: 4.0})
 	
 	assert.True(t, service.isCharging, "Should not stop immediately")
 	assert.NotNil(t, service.pvShortageStartTime)
