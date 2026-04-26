@@ -20,6 +20,7 @@ type dawnConsumerService struct {
 	actualAmps           float64 // What the car is actually drawing
 	minimumAmps          float64
 	maximumAmps          float64
+	userLimit            float64
 	haChannel            chan *gohaws.Message
 	eventChannel         chan *event
 	dawnId               string
@@ -27,6 +28,7 @@ type dawnConsumerService struct {
 	notifyDevice         string
 	dawnCurrentId        string
 	pvOnlySwitchId       string
+	userLimitId          string
 	currents             map[string]float64
 	exports              map[string]float64
 	pid                  *PIDController
@@ -41,9 +43,9 @@ type dawnConsumerService struct {
 	lastHardSafetyEvent  time.Time
 }
 
-func newDawnConsumerService(ctx context.Context, eventChannel chan *event, ha *haService, statusSensor string, dawnId string, dawnSwitch string, notifyDevice string, dawnCurrentId string, setpoint float64, pvOnlySwitchId string) *dawnConsumerService {
+func newDawnConsumerService(ctx context.Context, eventChannel chan *event, ha *haService, statusSensor string, dawnId string, dawnSwitch string, notifyDevice string, dawnCurrentId string, setpoint float64, pvOnlySwitchId string, userLimitId string) *dawnConsumerService {
 	haChannel := make(chan *gohaws.Message)
-	ha.subscribeMulti([]string{statusSensor, dawnCurrentId, pvOnlySwitchId}, haChannel)
+	ha.subscribeMulti([]string{statusSensor, dawnCurrentId, pvOnlySwitchId, userLimitId}, haChannel)
 
 	pid := &PIDController{
 		Kp:       0.4,
@@ -57,6 +59,7 @@ func newDawnConsumerService(ctx context.Context, eventChannel chan *event, ha *h
 		haService:      ha,
 		minimumAmps:    6,
 		maximumAmps:    16,
+		userLimit:      16,
 		currentAmps:    6,
 		actualAmps:     0,
 		haChannel:      haChannel,
@@ -65,6 +68,7 @@ func newDawnConsumerService(ctx context.Context, eventChannel chan *event, ha *h
 		notifyDevice:   notifyDevice,
 		dawnCurrentId:  dawnCurrentId,
 		pvOnlySwitchId: pvOnlySwitchId,
+		userLimitId:    userLimitId,
 		currents:       make(map[string]float64),
 		exports:        make(map[string]float64),
 		pid:            pid,
@@ -91,6 +95,15 @@ Loop:
 					// Divide by 3 because the sensor is a sum of all 3 phases
 					ps.actualAmps = totalAmps / 3.0
 					ps.mu.Unlock()
+				} else if message.Event.Data.EntityID == ps.userLimitId {
+					limit := parseFloat(message.Event.Data.NewState.State)
+					ps.mu.Lock()
+					if limit > 0 {
+						ps.userLimit = limit
+						log.Printf("DAWN: User limit updated: %.2fA", limit)
+					}
+					ps.mu.Unlock()
+					ps.calculateAndSetAmps()
 				} else if message.Event.Data.EntityID == ps.pvOnlySwitchId {
 					state := strings.ToLower(fmt.Sprintf("%v", message.Event.Data.NewState.State))
 					ps.mu.Lock()
@@ -165,7 +178,6 @@ func (tc *dawnConsumerService) calculateAndSetAmps() {
 	defer tc.mu.Unlock()
 
 	maxPhaseCurrent := tc.getMaxCurrentInternal()
-	minPhaseExport := tc.getMinExportInternal()
 	netExport := tc.getNetExportInternal()
 
 	// 1. RESTART LOGIC
@@ -173,11 +185,11 @@ func (tc *dawnConsumerService) calculateAndSetAmps() {
 		canStart := false
 
 		if tc.pvOnlyMode {
-			// PV-Only Start Condition: All 3 phases must export >= 6A
-			if minPhaseExport >= tc.minimumAmps {
+			// PV-Only Start Condition: Total net export must be >= 18A (assuming 3-phase 6A start)
+			if netExport >= tc.minimumAmps*3.0 {
 				if tc.pvSurplusStartTime.IsZero() {
 					tc.pvSurplusStartTime = time.Now()
-					log.Printf("DAWN: PV surplus detected (%.2fA). Starting 5m stabilization timer.", minPhaseExport)
+					log.Printf("DAWN: PV surplus detected (Net: %.2fA). Starting 5m stabilization timer.", netExport)
 				} else if time.Since(tc.pvSurplusStartTime) > 5*time.Minute {
 					canStart = true
 					log.Printf("DAWN: PV surplus sustained for 5m. Starting EV charging.")
@@ -206,6 +218,7 @@ func (tc *dawnConsumerService) calculateAndSetAmps() {
 	}
 
 	// 2. HARD SAFETY OVERRIDE (Fuses)
+	// IMPORTANT: Fuses are per-phase, so we still use maxPhaseCurrent here!
 	hardSafetyThreshold := tc.setpoint + 2.0
 	if maxPhaseCurrent > hardSafetyThreshold && time.Since(tc.lastHardSafetyEvent) > 5*time.Second {
 		// BASELINE: Use Actual Draw if it's lower than our current setting
@@ -294,10 +307,8 @@ func (tc *dawnConsumerService) calculateAndSetAmps() {
 
 	if tc.pvOnlyMode {
 		currentSetpoint = 0.5
-		input = minPhaseExport
-		if minPhaseExport == 0 {
-			input = -maxPhaseCurrent
-		}
+		// Input is "average per-phase export"
+		input = netExport / 3.0
 	} else {
 		currentSetpoint = tc.setpoint
 		input = maxPhaseCurrent
@@ -319,12 +330,16 @@ func (tc *dawnConsumerService) calculateAndSetAmps() {
 		targetAmps = tc.maximumAmps
 	}
 
+	if tc.userLimit > 0 && targetAmps > tc.userLimit {
+		targetAmps = tc.userLimit
+	}
+
 	if int(targetAmps) != int(tc.currentAmps) {
 		modeStr := "NORMAL"
 		if tc.pvOnlyMode {
 			modeStr = "PV-ONLY"
 		}
-		log.Printf("DAWN: %s PID Adjustment %vA -> %vA (Max Phase: %.2fA, Min Export: %.2fA, Actual Draw: %.2fA)", modeStr, int(tc.currentAmps), int(targetAmps), maxPhaseCurrent, minPhaseExport, tc.actualAmps)
+		log.Printf("DAWN: %s PID Adjustment %vA -> %vA (Max Phase: %.2fA, Net Export: %.2fA, Actual Draw: %.2fA)", modeStr, int(tc.currentAmps), int(targetAmps), maxPhaseCurrent, netExport, tc.actualAmps)
 		tc.setAmpsInternal(targetAmps)
 	} else {
 		tc.currentAmps = targetAmps
@@ -364,6 +379,16 @@ func (tc *dawnConsumerService) getMinExportInternal() float64 {
 	return min
 }
 
+func (tc *dawnConsumerService) getNetExportInternal() float64 {
+	net := 0.0
+	for i := 1; i <= 3; i++ {
+		phaseKey := fmt.Sprintf("phase%d", i)
+		net += tc.exports[phaseKey]
+		net -= tc.currents[phaseKey]
+	}
+	return net
+}
+
 func (tc *dawnConsumerService) setAmps(amps float64) {
 	tc.mu.Lock()
 	defer tc.mu.Unlock()
@@ -389,14 +414,4 @@ func (tc *dawnConsumerService) getMaxCurrentInternal() float64 {
 		}
 	}
 	return max
-}
-
-func (tc *dawnConsumerService) getNetExportInternal() float64 {
-	net := 0.0
-	for i := 1; i <= 3; i++ {
-		phaseKey := fmt.Sprintf("phase%d", i)
-		net += tc.exports[phaseKey]
-		net -= tc.currents[phaseKey]
-	}
-	return net
 }
