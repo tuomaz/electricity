@@ -141,7 +141,7 @@ Loop:
 				}
 
 				if powerEvent.sensorType == SensorTypeCurrent && powerEvent.value > ps.max {
-					log.Printf("POWER: overcurrent! %v vs %v, phase %s", powerEvent.value, ps.max, message.Event.Data.EntityID)
+					log.Printf("POWER: overcurrent! %.2f vs %.2f, phase %s", powerEvent.value, ps.max, message.Event.Data.EntityID)
 					powerEvent.overCurrent = powerEvent.value - ps.max
 				}
 
