@@ -97,6 +97,7 @@ func TestDawnConsumer_PVStopCondition(t *testing.T) {
 		pvOnlyMode:      true,
 		minimumAmps:     6.0,
 		currentAmps:     6.0,
+		setpoint:        20.0,
 		exports:         map[string]float64{"phase1": 0, "phase2": 0, "phase3": 0},
 		currents:        map[string]float64{"phase1": 0, "phase2": 0, "phase3": 0},
 		haService:       &haService{},

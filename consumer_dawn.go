@@ -270,13 +270,17 @@ func (tc *dawnConsumerService) calculateAndSetAmps() {
 				tc.stopChargingInternal()
 				return
 			}
-		} else {
-			tc.pvShortageStartTime = time.Time{}
+		} else if netExport > -1.0 || tc.currentAmps > tc.minimumAmps {
+			// Only reset the timer if we clearly have surplus or are no longer at minimum charging
+			if !tc.pvShortageStartTime.IsZero() {
+				log.Printf("DAWN: PV shortage resolved (Net Export: %.2fA). Resetting shutdown timer.", netExport)
+				tc.pvShortageStartTime = time.Time{}
+			}
 		}
 	}
 
 	// 4. THROTTLE & LOCKOUT
-	if time.Since(tc.lastExecution) < 20*time.Second {
+	if time.Since(tc.lastExecution) < 30*time.Second {
 		return
 	}
 	if time.Since(tc.lastHardSafetyEvent) < 60*time.Second {
