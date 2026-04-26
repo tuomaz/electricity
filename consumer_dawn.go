@@ -31,6 +31,7 @@ type dawnConsumerService struct {
 	userLimitId          string
 	currents             map[string]float64
 	exports              map[string]float64
+	hasDirectionalData   map[string]bool
 	pid                  *PIDController
 	setpoint             float64
 	overcurrentStartTime time.Time
@@ -55,25 +56,26 @@ func newDawnConsumerService(ctx context.Context, eventChannel chan *event, ha *h
 	}
 
 	dawnConsumerService := &dawnConsumerService{
-		ctx:            ctx,
-		haService:      ha,
-		minimumAmps:    6,
-		maximumAmps:    16,
-		userLimit:      16,
-		currentAmps:    6,
-		actualAmps:     0,
-		haChannel:      haChannel,
-		dawnId:         dawnId,
-		dawnSwitch:     dawnSwitch,
-		notifyDevice:   notifyDevice,
-		dawnCurrentId:  dawnCurrentId,
-		pvOnlySwitchId: pvOnlySwitchId,
-		userLimitId:    userLimitId,
-		currents:       make(map[string]float64),
-		exports:        make(map[string]float64),
-		pid:            pid,
-		setpoint:       setpoint,
-		lastExecution:  time.Now(),
+		ctx:                ctx,
+		haService:          ha,
+		minimumAmps:        6,
+		maximumAmps:        16,
+		userLimit:          16,
+		currentAmps:        6,
+		actualAmps:         0,
+		haChannel:          haChannel,
+		dawnId:             dawnId,
+		dawnSwitch:         dawnSwitch,
+		notifyDevice:       notifyDevice,
+		dawnCurrentId:      dawnCurrentId,
+		pvOnlySwitchId:     pvOnlySwitchId,
+		userLimitId:        userLimitId,
+		currents:           make(map[string]float64),
+		exports:            make(map[string]float64),
+		hasDirectionalData: make(map[string]bool),
+		pid:                pid,
+		setpoint:           setpoint,
+		lastExecution:      time.Now(),
 	}
 
 	go dawnConsumerService.run()
@@ -152,14 +154,15 @@ func (tc *dawnConsumerService) updateCurrents(pe *powerEvent) {
 		tc.exports[phaseKey] = pe.value
 		// If we are exporting, import current is 0
 		tc.currents[phaseKey] = 0
+		tc.hasDirectionalData[phaseKey] = true
 	} else if pe.sensorType == SensorTypeImport {
 		tc.currents[phaseKey] = pe.value
 		// If we are importing, export current is 0
 		tc.exports[phaseKey] = 0
+		tc.hasDirectionalData[phaseKey] = true
 	} else if pe.sensorType == SensorTypeCurrent {
-		// Use absolute current sensor as a fallback or for fuse protection
-		// but ONLY if we haven't seen an explicit import/export update for this phase yet.
-		if tc.exports[phaseKey] <= 0.1 && tc.currents[phaseKey] <= 0.1 {
+		// Use absolute current sensor ONLY as a fallback if we haven't seen directional data.
+		if !tc.hasDirectionalData[phaseKey] {
 			tc.currents[phaseKey] = pe.value
 		}
 	}
