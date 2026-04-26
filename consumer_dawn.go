@@ -166,17 +166,18 @@ func (tc *dawnConsumerService) calculateAndSetAmps() {
 
 	maxPhaseCurrent := tc.getMaxCurrentInternal()
 	minPhaseExport := tc.getMinExportInternal()
+	netExport := tc.getNetExportInternal()
 
 	// 1. RESTART LOGIC
 	if !tc.isCharging {
 		canStart := false
 
 		if tc.pvOnlyMode {
-			// PV-Only Start Condition: All 3 phases must export >= 6A
-			if minPhaseExport >= tc.minimumAmps {
+			// PV-Only Start Condition: Total net export must be >= 18A (assuming 3-phase 6A start)
+			if netExport >= tc.minimumAmps*3.0 {
 				if tc.pvSurplusStartTime.IsZero() {
 					tc.pvSurplusStartTime = time.Now()
-					log.Printf("DAWN: PV surplus detected (%.2fA). Starting 5m stabilization timer.", minPhaseExport)
+					log.Printf("DAWN: PV surplus detected (Net: %.2fA). Starting 5m stabilization timer.", netExport)
 				} else if time.Since(tc.pvSurplusStartTime) > 5*time.Minute {
 					canStart = true
 					log.Printf("DAWN: PV surplus sustained for 5m. Starting EV charging.")
@@ -383,4 +384,14 @@ func (tc *dawnConsumerService) getMaxCurrentInternal() float64 {
 		}
 	}
 	return max
+}
+
+func (tc *dawnConsumerService) getNetExportInternal() float64 {
+	net := 0.0
+	for i := 1; i <= 3; i++ {
+		phaseKey := fmt.Sprintf("phase%d", i)
+		net += tc.exports[phaseKey]
+		net -= tc.currents[phaseKey]
+	}
+	return net
 }

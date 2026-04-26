@@ -44,7 +44,7 @@ func TestDawnConsumer_PVStartCondition(t *testing.T) {
 		pid:          &PIDController{},
 	}
 
-	// 1. Surplus detected (7A per phase)
+	// 1. Surplus detected (Net: 21A, total export >= 18A)
 	service.updateCurrents(&powerEvent{sensorType: SensorTypeExport, phaseIndex: 1, value: 7.0})
 	service.updateCurrents(&powerEvent{sensorType: SensorTypeExport, phaseIndex: 2, value: 7.0})
 	service.updateCurrents(&powerEvent{sensorType: SensorTypeExport, phaseIndex: 3, value: 7.0})
