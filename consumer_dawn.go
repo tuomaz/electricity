@@ -140,13 +140,15 @@ func (tc *dawnConsumerService) updateCurrents(pe *powerEvent) {
 		// If we are exporting, import current is 0
 		tc.currents[phaseKey] = 0
 	} else if pe.sensorType == SensorTypeImport {
-		tc.currents[phaseKey] = pe.value
+		if pe.value > tc.currents[phaseKey] {
+			tc.currents[phaseKey] = pe.value
+		}
 		// If we are importing, export current is 0
 		tc.exports[phaseKey] = 0
 	} else if pe.sensorType == SensorTypeCurrent {
-		// Use absolute current sensor as a fallback or for fuse protection
-		// but ONLY if we haven't seen an explicit import/export update for this phase yet.
-		if tc.exports[phaseKey] <= 0.1 && tc.currents[phaseKey] <= 0.1 {
+		// Absolute current sensor is our most authoritative source for fuse protection.
+		// We use the maximum of the existing value (possibly from import sensors) and this one.
+		if pe.value > tc.currents[phaseKey] {
 			tc.currents[phaseKey] = pe.value
 		}
 	}
