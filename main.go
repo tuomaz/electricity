@@ -29,7 +29,7 @@ func main() {
 	signal.Notify(sigs, syscall.SIGINT, syscall.SIGTERM)
 	go signalHandler(cancel, sigs)
 
-	haUri, haToken, area, dawn, dawnSwitch, notifyDevice, dawnCurrent, pvOnlySwitchId, phase1, phase2, phase3, export1, export2, export3, voltage1, voltage2, voltage3, import1, import2, import3 := readEnv()
+	haUri, haToken, area, dawn, dawnSwitch, notifyDevice, dawnCurrent, pvOnlySwitchId, dawnUserLimit, phase1, phase2, phase3, export1, export2, export3, voltage1, voltage2, voltage3, import1, import2, import3 := readEnv()
 
 	events := make(chan *event)
 
@@ -41,7 +41,7 @@ func main() {
 		voltage1, voltage2, voltage3,
 		MAX_PHASE_CURRENT)
 	priceService := newPriceService(area)
-	dawnService := newDawnConsumerService(ctx, events, haService, "sensor.dawn_status_connector", dawn, dawnSwitch, notifyDevice, dawnCurrent, MAX_PHASE_CURRENT, pvOnlySwitchId)
+	dawnService := newDawnConsumerService(ctx, events, haService, "sensor.dawn_status_connector", dawn, dawnSwitch, notifyDevice, dawnCurrent, MAX_PHASE_CURRENT, pvOnlySwitchId, dawnUserLimit)
 
 	// TODO: move this inside service
 	s := gocron.NewScheduler(time.UTC)
@@ -77,8 +77,8 @@ MainLoop:
 	s.Remove(job)
 }
 
-func readEnv() (string, string, string, string, string, string, string, string, string, string, string, string, string, string, string, string, string, string, string, string) {
-	var haURI, haToken, area, dawn, dawnSwitch, notifyDevice, dawnCurrent, pvOnlySwitch string
+func readEnv() (string, string, string, string, string, string, string, string, string, string, string, string, string, string, string, string, string, string, string, string, string) {
+	var haURI, haToken, area, dawn, dawnSwitch, notifyDevice, dawnCurrent, pvOnlySwitch, dawnUserLimit string
 	var phase1, phase2, phase3, export1, export2, export3, voltage1, voltage2, voltage3 string
 	var import1, import2, import3 string
 
@@ -138,6 +138,8 @@ func readEnv() (string, string, string, string, string, string, string, string, 
 		log.Fatalf("no PV only switch found")
 	}
 
+	dawnUserLimit = getEnvOrDefault("DAWN_USER_LIMIT", "")
+
 	// Phase Currents
 	phase1 = getEnvOrDefault("PHASE_1_CURRENT", "sensor.current_phase_1")
 	phase2 = getEnvOrDefault("PHASE_2_CURRENT", "sensor.current_phase_2")
@@ -158,7 +160,7 @@ func readEnv() (string, string, string, string, string, string, string, string, 
 	voltage2 = getEnvOrDefault("PHASE_2_VOLTAGE", "sensor.voltage_phase_2")
 	voltage3 = getEnvOrDefault("PHASE_3_VOLTAGE", "sensor.voltage_phase_3")
 
-	return haURI, haToken, area, dawn, dawnSwitch, notifyDevice, dawnCurrent, pvOnlySwitch,
+	return haURI, haToken, area, dawn, dawnSwitch, notifyDevice, dawnCurrent, pvOnlySwitch, dawnUserLimit,
 		phase1, phase2, phase3, export1, export2, export3, voltage1, voltage2, voltage3,
 		import1, import2, import3
 }
