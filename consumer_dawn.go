@@ -123,6 +123,19 @@ Loop:
 					state := strings.ToLower(fmt.Sprintf("%v", message.Event.Data.NewState.State))
 					ps.mu.Lock()
 					ps.connectorStatus = state
+					// Sync isCharging state with reality
+					switch state {
+					case "charging", "3", "busy":
+						if !ps.isCharging {
+							log.Printf("DAWN: Detected external charging start. Enabling safety monitoring.")
+							ps.isCharging = true
+						}
+					case "disconnected", "1", "finishing", "error":
+						if ps.isCharging {
+							log.Printf("DAWN: Detected charging stop (Status: %s).", state)
+							ps.isCharging = false
+						}
+					}
 					ps.mu.Unlock()
 					log.Printf("DAWN: connector status: %s", state)
 				}
