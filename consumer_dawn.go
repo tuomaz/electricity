@@ -210,8 +210,11 @@ func (tc *dawnConsumerService) calculateAndSetAmps() {
 					canStart = true
 					log.Printf("DAWN: PV surplus sustained for 5m. Starting EV charging.")
 				}
-			} else {
-				tc.pvSurplusStartTime = time.Time{}
+			} else if netExport < (tc.minimumAmps*3.0 - 3.0) {
+				if !tc.pvSurplusStartTime.IsZero() {
+					log.Printf("DAWN: PV surplus dropped below threshold (Net: %.2fA). Resetting stabilization timer.", netExport)
+					tc.pvSurplusStartTime = time.Time{}
+				}
 			}
 		} else {
 			// Normal Start Condition: Sufficient headroom
