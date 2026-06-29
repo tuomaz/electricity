@@ -84,7 +84,7 @@ func TestDawnConsumer_PVStartCondition(t *testing.T) {
 
 	service.calculateAndSetAmps()
 	assert.False(t, service.isCharging, "Should not start immediately")
-	assert.NotNil(t, service.pvSurplusStartTime)
+	assert.NotZero(t, service.pvSurplusStartTime)
 
 	// 2. Fast forward time (6 minutes later)
 	service.pvSurplusStartTime = time.Now().Add(-6 * time.Minute)
@@ -116,12 +116,38 @@ func TestDawnConsumer_PVStopCondition(t *testing.T) {
 
 	service.calculateAndSetAmps()
 	assert.True(t, service.isCharging, "Should not stop immediately")
-	assert.NotNil(t, service.pvShortageStartTime)
+	assert.NotZero(t, service.pvShortageStartTime)
 
 	// 2. Fast forward time (6 minutes later)
 	service.pvShortageStartTime = time.Now().Add(-6 * time.Minute)
 	service.calculateAndSetAmps()
 	assert.False(t, service.isCharging, "Should stop after 5 minutes of sustained net grid import > 3A")
+}
+
+func TestDawnConsumer_PVStartHysteresis(t *testing.T) {
+	service := &dawnConsumerService{
+		isCharging:         false,
+		pvOnlyMode:         true,
+		minimumAmps:        6.0,
+		maximumAmps:        16.0,
+		setpoint:           20.0,
+		exports:            make(map[string]float64),
+		currents:           make(map[string]float64),
+		haService:          &haService{},
+		pid:                &PIDController{},
+	}
+
+	// 1. Trigger threshold met (18.5A)
+	service.updateCurrents(&powerEvent{sensorType: SensorTypeExport, phaseIndex: 1, value: 18.5})
+	assert.NotZero(t, service.pvSurplusStartTime, "Timer should start at 18.5A")
+
+	// 2. Dip into hysteresis zone (16.0A) - should NOT reset
+	service.updateCurrents(&powerEvent{sensorType: SensorTypeExport, phaseIndex: 1, value: 16.0})
+	assert.False(t, service.pvSurplusStartTime.IsZero(), "Timer should NOT reset at 16.0A (hysteresis)")
+
+	// 3. Drop below hysteresis threshold (14.5A) - should reset
+	service.updateCurrents(&powerEvent{sensorType: SensorTypeExport, phaseIndex: 1, value: 14.5})
+	assert.True(t, service.pvSurplusStartTime.IsZero(), "Timer SHOULD reset at 14.5A")
 }
 
 func TestDawnConsumer_PVOnlySwitchTrigger(t *testing.T) {
