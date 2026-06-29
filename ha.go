@@ -28,6 +28,8 @@ type haService struct {
 	notifyDevice    string
 	startupNotified bool
 	subscriptions   []*subscription
+	LastAmpsUpdate  int
+	LastDawnID      string
 }
 
 type subscription struct {
@@ -135,6 +137,8 @@ func (ha *haService) subscribeMulti(entities []string, channel chan *gohaws.Mess
 }
 
 func (ha *haService) updateAmpsDawn(amps int, dawnID string) {
+	ha.LastAmpsUpdate = amps
+	ha.LastDawnID = dawnID
 	if ha.client == nil {
 		return
 	}
