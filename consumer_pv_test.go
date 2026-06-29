@@ -196,3 +196,88 @@ func TestDawnConsumer_PVOnlySwitchTrigger(t *testing.T) {
 	assert.True(t, mode, "PV mode should be ON")
 	assert.True(t, started, "PV surplus timer should have started immediately upon switch ON")
 }
+
+func TestDawnConsumer_ForceStartAt6A(t *testing.T) {
+	haSubChan := make(chan *gohaws.Message, 10)
+	haSvc := &haService{}
+	service := &dawnConsumerService{
+		isCharging:      false,
+		pvOnlyMode:      false,
+		minimumAmps:     6.0,
+		maximumAmps:     16.0,
+		currentAmps:     10.0, // Last setting was 10A
+		setpoint:        20.0,
+		exports:         make(map[string]float64),
+		currents:        make(map[string]float64),
+		haService:       haSvc,
+		haChannel:       haSubChan,
+		pid:             &PIDController{},
+		connectorStatus: "available",
+		dawnId:          "number.dawn_amps",
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	service.ctx = ctx
+	defer cancel()
+	go service.run()
+
+	// 1. Case: External Start (Transitions from available to charging)
+	haSubChan <- &gohaws.Message{
+		Event: &gohaws.Event{
+			Data: &gohaws.Data{
+				EntityID: "sensor.dawn_status_connector",
+				NewState: &gohaws.State{State: "charging"},
+			},
+		},
+	}
+
+	time.Sleep(50 * time.Millisecond)
+
+	service.mu.RLock()
+	isCharging := service.isCharging
+	currentAmps := service.currentAmps
+	service.mu.RUnlock()
+
+	assert.True(t, isCharging, "Should enable safety monitoring / charging flag")
+	assert.Equal(t, 6.0, currentAmps, "Should enforce starting at 6A on external start")
+	assert.Equal(t, 6, haSvc.LastAmpsUpdate, "Should send 6A command to Home Assistant")
+}
+
+func TestDawnConsumer_InternalStart_EnforceOnPreparing(t *testing.T) {
+	haSubChan := make(chan *gohaws.Message, 10)
+	haSvc := &haService{}
+	service := &dawnConsumerService{
+		isCharging:      true, // Started internally (e.g. via calculateAndSetAmps)
+		pvOnlyMode:      true,
+		minimumAmps:     6.0,
+		maximumAmps:     16.0,
+		currentAmps:     6.0,
+		setpoint:        20.0,
+		exports:         make(map[string]float64),
+		currents:        make(map[string]float64),
+		haService:       haSvc,
+		haChannel:       haSubChan,
+		pid:             &PIDController{},
+		connectorStatus: "available",
+		dawnId:          "number.dawn_amps",
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	service.ctx = ctx
+	defer cancel()
+	go service.run()
+
+	// Simulate transition to preparing
+	haSubChan <- &gohaws.Message{
+		Event: &gohaws.Event{
+			Data: &gohaws.Data{
+				EntityID: "sensor.dawn_status_connector",
+				NewState: &gohaws.State{State: "preparing"},
+			},
+		},
+	}
+
+	time.Sleep(50 * time.Millisecond)
+
+	assert.Equal(t, 6, haSvc.LastAmpsUpdate, "Should enforce 6A limit when connector transitions to preparing")
+}

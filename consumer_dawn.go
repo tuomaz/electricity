@@ -122,19 +122,36 @@ Loop:
 				} else {
 					state := strings.ToLower(fmt.Sprintf("%v", message.Event.Data.NewState.State))
 					ps.mu.Lock()
+					oldStatus := ps.connectorStatus
 					ps.connectorStatus = state
+
+					isActiveState := state == "preparing" || state == "charging" || state == "suspendedev" || state == "3" || state == "busy"
+					wasActiveState := oldStatus == "preparing" || oldStatus == "charging" || oldStatus == "suspendedev" || oldStatus == "3" || oldStatus == "busy"
+
+					shouldForceSet := false
+					if ps.isCharging && isActiveState && !wasActiveState {
+						shouldForceSet = true
+					}
+
 					// Sync isCharging state with reality
 					switch state {
 					case "charging", "3", "busy":
 						if !ps.isCharging {
 							log.Printf("DAWN: Detected external charging start. Enabling safety monitoring.")
 							ps.isCharging = true
+							ps.currentAmps = ps.minimumAmps
+							shouldForceSet = true
 						}
 					case "disconnected", "1", "finishing", "error":
 						if ps.isCharging {
 							log.Printf("DAWN: Detected charging stop (Status: %s).", state)
 							ps.isCharging = false
 						}
+					}
+
+					if shouldForceSet {
+						log.Printf("DAWN: Connector transitioned %s -> %s. Enforcing current limit: %.2fA", oldStatus, state, ps.currentAmps)
+						ps.haService.updateAmpsDawn(int(ps.currentAmps), ps.dawnId)
 					}
 					ps.mu.Unlock()
 					log.Printf("DAWN: connector status: %s", state)
@@ -150,6 +167,15 @@ func (tc *dawnConsumerService) updateCurrents(pe *powerEvent) {
 	phaseKey := fmt.Sprintf("phase%d", pe.phaseIndex)
 
 	tc.mu.Lock()
+	if tc.exports == nil {
+		tc.exports = make(map[string]float64)
+	}
+	if tc.currents == nil {
+		tc.currents = make(map[string]float64)
+	}
+	if tc.hasDirectionalData == nil {
+		tc.hasDirectionalData = make(map[string]bool)
+	}
 	if pe.sensorType == SensorTypeExport {
 		tc.exports[phaseKey] = pe.value
 		// If we are exporting, import current is 0
