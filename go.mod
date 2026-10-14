@@ -3,12 +3,13 @@ module github.com/tuomaz/electricity
 go 1.24.0
 
 //replace github.com/tuomaz/gohaws => ../gohaws
+//replace github.com/tuomaz/nordpool => ../nordpool
 
 require (
 	github.com/go-co-op/gocron v1.37.0
 	github.com/stretchr/testify v1.11.1
 	github.com/tuomaz/gohaws v0.0.0-20260215094358-74956dd4016d
-	github.com/tuomaz/nordpool v0.0.0-20230911180659-0d2f7d98b006
+	github.com/tuomaz/nordpool v0.0.0-20261014114910-31940eb15a02
 )
 
 require (
