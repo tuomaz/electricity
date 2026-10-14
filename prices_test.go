@@ -63,6 +63,11 @@ func TestPriceService_LiveUpdatePrices(t *testing.T) {
 
 	price, err := ps.GetCurrentPrice()
 	assert.NoError(t, err, "GetCurrentPrice should return price for current hour")
-	t.Logf("Live current electricity price for SE2: %.2f SEK/MWh", price)
+	t.Logf("Live current electricity price for SE2: %.2f öre/kWh", price)
 	assert.True(t, price > 0, "Price should be greater than 0")
+
+	// Verify caching: calling updatePrices again should NOT re-fetch today's data
+	updated2, err2 := ps.updatePrices()
+	assert.NoError(t, err2)
+	assert.False(t, updated2, "Second call should use cached today data")
 }

@@ -135,7 +135,7 @@ Loop:
 					ps.mu.Lock()
 					ps.currentPriceLimit = limit
 					ps.mu.Unlock()
-					log.Printf("DAWN: price limit updated: %.2f", limit)
+					log.Printf("DAWN: price limit updated: %.2f öre", limit)
 					ps.calculateAndSetAmps()
 				} else {
 					state := strings.ToLower(fmt.Sprintf("%v", message.Event.Data.NewState.State))
@@ -277,7 +277,7 @@ func (tc *dawnConsumerService) calculateAndSetAmps() {
 			// Normal Start Condition: Sufficient headroom AND price is OK
 			if maxPhaseCurrent > 0 && maxPhaseCurrent <= tc.setpoint-8.0 {
 				canStart = true
-				log.Printf("DAWN: Sufficient headroom (%.2fA) and price OK (%.2f). Starting EV charging.", tc.setpoint-maxPhaseCurrent, tc.currentPrice)
+				log.Printf("DAWN: Sufficient headroom (%.2fA) and price OK (%.2f öre). Starting EV charging.", tc.setpoint-maxPhaseCurrent, tc.currentPrice)
 			}
 		}
 
@@ -335,9 +335,7 @@ func (tc *dawnConsumerService) calculateAndSetAmps() {
 
 	// 3. PRICE STOP LOGIC
 	if !tc.pvOnlyMode && tc.currentPriceLimit > 0 && tc.currentPrice > tc.currentPriceLimit {
-		msg := fmt.Sprintf("Price limit exceeded (%.2f > %.2f). Stopping EV charging.", tc.currentPrice, tc.currentPriceLimit)
-		log.Printf("DAWN: %s", msg)
-		tc.haService.sendNotification(msg, tc.notifyDevice)
+		log.Printf("DAWN: Price limit exceeded (%.2f > %.2f öre). Stopping EV charging.", tc.currentPrice, tc.currentPriceLimit)
 		tc.stopChargingInternal()
 		return
 	}

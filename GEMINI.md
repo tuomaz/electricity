@@ -19,9 +19,12 @@ The primary purpose is to protect main fuses while maximizing EV charging speed.
 - **Hysteresis:** Internal floating-point tracking ensures commands are only sent to HA when an integer boundary is crossed.
 - **Range:** Charging is maintained within the standard **6A to 16A** range.
 
-### Price Monitoring
-The service periodically (every 30 minutes) fetches electricity prices from **Nordpool**. 
-- *Note: While prices are fetched and stored, they are currently unused in the charging logic. This provides a foundation for future "Smart Charging" (charging only during low-price hours).*
+### Price Monitoring & Smart Charging
+The service fetches electricity prices for today and tomorrow (24h blocks) from **Nordpool** and caches them locally, checking every 15 minutes.
+- Prices are converted from Nordpool's `SEK/MWh` to **`öre/kWh`**.
+- If a `PRICE_LIMIT_ENTITY` (Home Assistant `input_number`, e.g. in öre/kWh) is configured, the charger will only charge from the grid if the current spot price is at or below this ceiling.
+- If in **PV-Only mode**, price limits are ignored so charging with free solar surplus continues unimpeded.
+- Charging stops automatically if spot prices exceed the ceiling (push notifications are omitted to prevent spam).
 
 ## Architecture
 
@@ -29,7 +32,7 @@ The service periodically (every 30 minutes) fetches electricity prices from **No
 - **`ha.go`**: WebSocket client for Home Assistant. Handles real-time event subscriptions and service calls.
 - **`power.go`**: Processes phase current updates and detects overcurrent events.
 - **`consumer_dawn.go`**: Implements the load balancing algorithm for the Dawn charger.
-- **`prices.go`**: Fetches and manages Nordpool electricity price data.
+- **`prices.go`**: Fetches, caches, and manages Nordpool electricity price data.
 
 ## Configuration (Environment Variables)
 
@@ -42,6 +45,7 @@ The service periodically (every 30 minutes) fetches electricity prices from **No
 | `DAWN_SWITCH` | Home Assistant Entity ID for the Dawn charger's on/off switch (e.g., `switch.dawn_charging`) |
 | `DAWN_CURRENT` | HA Entity ID for the actual charging current sensor (e.g., `sensor.dawn_actual_current`) |
 | `DAWN_USER_LIMIT` | Optional: HA Entity ID for a user-configurable maximum charging limit (e.g., `input_number.dawn_soft_limit`) |
+| `PRICE_LIMIT_ENTITY` | Optional: HA Entity ID for a user-configurable maximum price limit in öre/kWh (e.g., `input_number.dawn_price_limit`) |
 | `NOTIFY_DEVICE` | Home Assistant notification service name (e.g., `mobile_app_my_phone`) |
 
 ## Technical Stack
