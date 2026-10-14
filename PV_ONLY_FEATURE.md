@@ -24,22 +24,23 @@ This feature allows the service to dynamically adjust the EV charging load to ma
 - **PV-Only Mode (Switch ON)**: The charger only operates when there is a solar surplus.
 - **Normal Mode (Switch OFF)**: The charger operates based on the maximum fuse limit (20A), as currently implemented.
 
-#### Start Condition (PV-Only Mode)
+## Start Condition (PV-Only Mode)
 - The charger is currently **OFF**.
-- **All three phases** must show an export of at least **6A** (the charger's minimum):
-    - `Phase 1 Export >= 6A` AND `Phase 2 Export >= 6A` AND `Phase 3 Export >= 6A`.
+- The **net export across all three phases** (sum of exports - sum of imports) must be at least **18A** (assuming 3-phase charging at the minimum 6A):
+    - `Net Export >= 18A`.
 - This condition must be met for a sustained period of **5 minutes** to ensure steady solar production before starting.
 
 #### Dynamic Adjustment (Optimization)
 - While charging in PV-Only mode:
-    - The goal is to keep **Import at 0A** on all phases.
-    - The charging current is limited by the **least exporting phase**.
-    - `Available Amps = min(Phase 1 Export, Phase 2 Export, Phase 3 Export) + Current Charging Amps`.
-    - The PID controller will target keeping the surplus as close to 0A as possible without crossing into import.
+    - The goal is to keep **Net Import at 0A**.
+    - The charging current is guided by the **total net surplus**.
+    - `Available Amps (per phase) = (Net Export / 3.0) + Current Charging Amps`.
+    - The PID controller will target keeping the net surplus as close to 0A as possible without crossing into net import.
+    - **Note:** Individual phase limits (20A fuses) still apply as a hard safety override.
 
 #### Stop Condition (PV-Only Mode)
 - The charger is currently **ON** and at its minimum setting (**6A**).
-- If **any phase** starts **importing** energy from the grid (i.e., `Import > 1.0A`) for a sustained period of **5 minutes**, the charger is turned **OFF**.
+- If the system starts **net importing** energy from the grid (i.e., `Net Import > 3.0A` sustained) for a period of **5 minutes**, the charger is turned **OFF**.
 - This ensures that if household loads increase or solar production decreases beyond the charger's ability to throttle down, we stop charging to avoid grid costs.
 
 ## Technical Implementation Steps

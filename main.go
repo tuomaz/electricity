@@ -29,7 +29,7 @@ func main() {
 	signal.Notify(sigs, syscall.SIGINT, syscall.SIGTERM)
 	go signalHandler(cancel, sigs)
 
-	haUri, haToken, area, dawn, dawnSwitch, notifyDevice, dawnCurrent, pvOnlySwitchId, phase1, phase2, phase3, export1, export2, export3, voltage1, voltage2, voltage3, priceLimitEntity := readEnv()
+	haUri, haToken, area, dawn, dawnSwitch, notifyDevice, dawnCurrent, pvOnlySwitchId, dawnUserLimit, priceLimitEntity, phase1, phase2, phase3, export1, export2, export3, voltage1, voltage2, voltage3, import1, import2, import3 := readEnv()
 
 	events := make(chan *event)
 
@@ -37,10 +37,11 @@ func main() {
 	_ = newPowerService(ctx, events, haService,
 		phase1, phase2, phase3,
 		export1, export2, export3,
+		import1, import2, import3,
 		voltage1, voltage2, voltage3,
 		MAX_PHASE_CURRENT)
 	priceService := newPriceService(area)
-	dawnService := newDawnConsumerService(ctx, events, haService, "sensor.dawn_status_connector", dawn, dawnSwitch, notifyDevice, dawnCurrent, MAX_PHASE_CURRENT, pvOnlySwitchId, priceLimitEntity)
+	dawnService := newDawnConsumerService(ctx, events, haService, "sensor.dawn_status_connector", dawn, dawnSwitch, notifyDevice, dawnCurrent, MAX_PHASE_CURRENT, pvOnlySwitchId, dawnUserLimit, priceLimitEntity)
 
 	// TODO: move this inside service
 	s := gocron.NewScheduler(time.UTC)
@@ -83,9 +84,10 @@ MainLoop:
 	s.Remove(job)
 }
 
-func readEnv() (string, string, string, string, string, string, string, string, string, string, string, string, string, string, string, string, string, string) {
-	var haURI, haToken, area, dawn, dawnSwitch, notifyDevice, dawnCurrent, pvOnlySwitch string
-	var phase1, phase2, phase3, export1, export2, export3, voltage1, voltage2, voltage3, priceLimitEntity string
+func readEnv() (string, string, string, string, string, string, string, string, string, string, string, string, string, string, string, string, string, string, string, string, string, string) {
+	var haURI, haToken, area, dawn, dawnSwitch, notifyDevice, dawnCurrent, pvOnlySwitch, dawnUserLimit, priceLimitEntity string
+	var phase1, phase2, phase3, export1, export2, export3, voltage1, voltage2, voltage3 string
+	var import1, import2, import3 string
 
 	value, ok := os.LookupEnv("HAURI")
 	if ok {
@@ -143,12 +145,8 @@ func readEnv() (string, string, string, string, string, string, string, string, 
 		log.Fatalf("no PV only switch found")
 	}
 
-	value, ok = os.LookupEnv("PRICE_LIMIT_ENTITY")
-	if ok {
-		priceLimitEntity = strings.TrimSpace(value)
-	} else {
-		log.Fatalf("no price limit entity found")
-	}
+	dawnUserLimit = getEnvOrDefault("DAWN_USER_LIMIT", "")
+	priceLimitEntity = getEnvOrDefault("PRICE_LIMIT_ENTITY", "")
 
 	// Phase Currents
 	phase1 = getEnvOrDefault("PHASE_1_CURRENT", "sensor.current_phase_1")
@@ -160,13 +158,19 @@ func readEnv() (string, string, string, string, string, string, string, string, 
 	export2 = getEnvOrDefault("PHASE_2_EXPORT", "sensor.momentary_active_export_phase_2")
 	export3 = getEnvOrDefault("PHASE_3_EXPORT", "sensor.momentary_active_export_phase_3")
 
+	// Import Sensors
+	import1 = getEnvOrDefault("PHASE_1_IMPORT", "sensor.momentary_active_import_phase_1")
+	import2 = getEnvOrDefault("PHASE_2_IMPORT", "sensor.momentary_active_import_phase_2")
+	import3 = getEnvOrDefault("PHASE_3_IMPORT", "sensor.momentary_active_import_phase_3")
+
 	// Voltage Sensors
 	voltage1 = getEnvOrDefault("PHASE_1_VOLTAGE", "sensor.voltage_phase_1")
 	voltage2 = getEnvOrDefault("PHASE_2_VOLTAGE", "sensor.voltage_phase_2")
 	voltage3 = getEnvOrDefault("PHASE_3_VOLTAGE", "sensor.voltage_phase_3")
 
-	return haURI, haToken, area, dawn, dawnSwitch, notifyDevice, dawnCurrent, pvOnlySwitch,
-		phase1, phase2, phase3, export1, export2, export3, voltage1, voltage2, voltage3, priceLimitEntity
+	return haURI, haToken, area, dawn, dawnSwitch, notifyDevice, dawnCurrent, pvOnlySwitch, dawnUserLimit, priceLimitEntity,
+		phase1, phase2, phase3, export1, export2, export3, voltage1, voltage2, voltage3,
+		import1, import2, import3
 }
 
 func getEnvOrDefault(key, defaultValue string) string {
