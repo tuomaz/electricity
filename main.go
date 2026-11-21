@@ -43,11 +43,11 @@ func main() {
 	priceService := newPriceService(area)
 	dawnService := newDawnConsumerService(ctx, events, haService, "sensor.dawn_status_connector", dawn, dawnSwitch, notifyDevice, dawnCurrent, MAX_PHASE_CURRENT, pvOnlySwitchId, dawnUserLimit, priceLimitEntity)
 
-	// TODO: move this inside service
-	s := gocron.NewScheduler(time.UTC)
-	job, err := s.Every(15).Minutes().Do(func() {
-		updated, _ := priceService.updatePrices()
-		if updated {
+	updateAndApplyPrice := func() {
+		updated, err := priceService.updatePrices()
+		if err != nil {
+			log.Printf("Error updating prices: %v", err)
+		} else if updated {
 			log.Printf("Prices updated!")
 		}
 
@@ -57,7 +57,14 @@ func main() {
 		} else {
 			log.Printf("Error getting current price: %v", err)
 		}
-	})
+	}
+
+	// Fetch and apply initial price immediately on startup, then align to 15-minute Nordpool slots
+	updateAndApplyPrice()
+
+	// TODO: move this inside service
+	s := gocron.NewScheduler(time.UTC)
+	job, err := s.CronWithSeconds("1 0,15,30,45 * * * *").Do(updateAndApplyPrice)
 	if err != nil {
 		log.Fatalf("error setting up cron: %v", err)
 	}
