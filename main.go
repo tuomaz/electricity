@@ -7,7 +7,6 @@ import (
 	"os/signal"
 	"strings"
 	"syscall"
-	"time"
 
 	"github.com/go-co-op/gocron"
 )
@@ -31,7 +30,14 @@ func main() {
 
 	haUri, haToken, area, dawn, dawnSwitch, notifyDevice, dawnCurrent, pvOnlySwitchId, dawnUserLimit, priceLimitEntity, phase1, phase2, phase3, export1, export2, export3, voltage1, voltage2, voltage3, import1, import2, import3 := readEnv()
 
-	events := make(chan *event)
+	events := make(chan *event, 64)
+
+	priceService := newPriceService(area)
+	if updated, err := priceService.updatePrices(); err != nil {
+		log.Printf("Error updating initial prices: %v", err)
+	} else if updated {
+		log.Printf("Prices updated!")
+	}
 
 	haService := newHaService(ctx, haUri, haToken, notifyDevice)
 	_ = newPowerService(ctx, events, haService,
@@ -40,14 +46,13 @@ func main() {
 		import1, import2, import3,
 		voltage1, voltage2, voltage3,
 		MAX_PHASE_CURRENT)
-	priceService := newPriceService(area)
 	dawnService := newDawnConsumerService(ctx, events, haService, "sensor.dawn_status_connector", dawn, dawnSwitch, notifyDevice, dawnCurrent, MAX_PHASE_CURRENT, pvOnlySwitchId, dawnUserLimit, priceLimitEntity)
 
-	// TODO: move this inside service
-	s := gocron.NewScheduler(time.UTC)
-	job, err := s.Every(15).Minutes().Do(func() {
-		updated, _ := priceService.updatePrices()
-		if updated {
+	updateAndApplyPrice := func() {
+		updated, err := priceService.updatePrices()
+		if err != nil {
+			log.Printf("Error updating prices: %v", err)
+		} else if updated {
 			log.Printf("Prices updated!")
 		}
 
@@ -56,8 +61,16 @@ func main() {
 			dawnService.UpdatePrice(currentPrice)
 		} else {
 			log.Printf("Error getting current price: %v", err)
+			dawnService.InvalidatePrice()
 		}
-	})
+	}
+
+	// Apply initial price immediately on startup, then align to 15-minute Nordpool slots
+	updateAndApplyPrice()
+
+	// TODO: move this inside service
+	s := gocron.NewScheduler(priceService.loc)
+	job, err := s.CronWithSeconds("1 0,15,30,45 * * * *").Do(updateAndApplyPrice)
 	if err != nil {
 		log.Fatalf("error setting up cron: %v", err)
 	}

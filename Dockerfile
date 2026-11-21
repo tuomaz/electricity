@@ -7,6 +7,8 @@ COPY . .
 RUN go build -o electricity .
 
 FROM alpine:3.19 AS final
+RUN apk add --no-cache tzdata
+ENV TZ=Europe/Stockholm
 WORKDIR /app
 COPY --from=build /app/electricity /app/electricity
 CMD ["./electricity"]

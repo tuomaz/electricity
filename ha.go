@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"log"
+	"sync"
 	"time"
 
 	"github.com/tuomaz/gohaws"
@@ -21,6 +22,7 @@ func newHaService(ctx context.Context, uri string, token string, notifyDevice st
 }
 
 type haService struct {
+	mu              sync.RWMutex
 	context         context.Context
 	client          *gohaws.HaClient
 	uri             string
@@ -50,13 +52,13 @@ func (ha *haService) manageConnection() {
 				time.Sleep(5 * time.Second)
 				continue
 			}
-			ha.client = client
 
-			if !ha.startupNotified && ha.notifyDevice != "" {
-				ha.sendNotification("Electricity Management Service started and connected", ha.notifyDevice)
+			ha.mu.Lock()
+			ha.client = client
+			shouldNotify := !ha.startupNotified && ha.notifyDevice != ""
+			if shouldNotify {
 				ha.startupNotified = true
 			}
-
 			// Re-subscribe existing entities
 			for _, sub := range ha.subscriptions {
 				for _, entity := range sub.entities {
@@ -64,10 +66,15 @@ func (ha *haService) manageConnection() {
 					ha.client.Add(entity)
 				}
 			}
+			ha.mu.Unlock()
+
+			if shouldNotify {
+				ha.sendNotification("Electricity Management Service started and connected", ha.notifyDevice)
+			}
 
 			// Fetch current states so we are aware of reality immediately
 			log.Printf("HA service: fetching current states")
-			if err := ha.client.FetchStates(ha.context); err != nil {
+			if err := client.FetchStates(ha.context); err != nil {
 				log.Printf("HA service: warning: could not fetch initial states: %v", err)
 			} else {
 				ha.injectCurrentStates()
@@ -83,6 +90,13 @@ func (ha *haService) manageConnection() {
 }
 
 func (ha *haService) injectCurrentStates() {
+	ha.mu.RLock()
+	defer ha.mu.RUnlock()
+
+	if ha.client == nil {
+		return
+	}
+
 	for _, sub := range ha.subscriptions {
 		for _, entityID := range sub.entities {
 			if state, ok := ha.client.GetState(entityID); ok {
@@ -100,6 +114,7 @@ func (ha *haService) injectCurrentStates() {
 				case sub.channel <- msg:
 					log.Printf("HA service: injected initial state for %s", entityID)
 				default:
+					log.Printf("HA service: warning: subscriber channel full, dropped initial state for %s", entityID)
 				}
 			}
 		}
@@ -111,6 +126,9 @@ func (ha *haService) subscribe(entity string, channel chan *gohaws.Message) {
 }
 
 func (ha *haService) subscribeMulti(entities []string, channel chan *gohaws.Message) {
+	ha.mu.Lock()
+	defer ha.mu.Unlock()
+
 	for _, entity := range entities {
 		found := false
 		for _, sub := range ha.subscriptions {
@@ -137,9 +155,13 @@ func (ha *haService) subscribeMulti(entities []string, channel chan *gohaws.Mess
 }
 
 func (ha *haService) updateAmpsDawn(amps int, dawnID string) {
+	ha.mu.Lock()
 	ha.LastAmpsUpdate = amps
 	ha.LastDawnID = dawnID
-	if ha.client == nil {
+	client := ha.client
+	ha.mu.Unlock()
+
+	if client == nil {
 		return
 	}
 	if amps < 6 {
@@ -149,11 +171,15 @@ func (ha *haService) updateAmpsDawn(amps int, dawnID string) {
 		amps = 16
 	}
 	data := map[string]string{"value": fmt.Sprintf("%d", amps)}
-	ha.client.CallService(ha.context, "number", "set_value", data, dawnID)
+	client.CallService(ha.context, "number", "set_value", data, dawnID)
 }
 
 func (ha *haService) setDawnSwitch(on bool, switchID string) {
-	if ha.client == nil {
+	ha.mu.RLock()
+	client := ha.client
+	ha.mu.RUnlock()
+
+	if client == nil {
 		return
 	}
 	service := "turn_off"
@@ -161,20 +187,32 @@ func (ha *haService) setDawnSwitch(on bool, switchID string) {
 		service = "turn_on"
 	}
 	log.Printf("HA service: setting Dawn switch %s to %v", switchID, on)
-	ha.client.CallService(ha.context, "switch", service, nil, switchID)
+	client.CallService(ha.context, "switch", service, nil, switchID)
 }
 
 func (ha *haService) sendNotification(message string, device string) {
-	if ha.client == nil {
+	ha.mu.RLock()
+	client := ha.client
+	ha.mu.RUnlock()
+
+	if client == nil {
 		return
 	}
 	sd := map[string]string{"title": "Electricity", "message": message}
-	ha.client.CallService(ha.context, "notify", device, sd, "")
+	client.CallService(ha.context, "notify", device, sd, "")
 }
 
 func (ha *haService) run() {
+	ha.mu.RLock()
+	client := ha.client
+	ha.mu.RUnlock()
+
+	if client == nil {
+		return
+	}
+
 	log.Printf("HA service: start listening to message from HA")
-	err := ha.client.SubscribeToUpdates(ha.context)
+	err := client.SubscribeToUpdates(ha.context)
 	if err != nil {
 		log.Printf("HA service: failed to subscribe: %v", err)
 		return
@@ -185,7 +223,7 @@ Loop:
 		select {
 		case <-ha.context.Done():
 			break Loop
-		case message, ok := <-ha.client.EventChannel:
+		case message, ok := <-client.EventChannel:
 			if !ok {
 				log.Printf("HA service: event channel closed")
 				break Loop
@@ -199,6 +237,9 @@ Loop:
 }
 
 func (ha *haService) sendEventToSubscribers(message *gohaws.Message) {
+	ha.mu.RLock()
+	defer ha.mu.RUnlock()
+
 	for _, sub := range ha.subscriptions {
 		for _, entity := range sub.entities {
 			if message.Event.Data.EntityID == entity {

@@ -11,6 +11,7 @@ import (
 
 type PriceService struct {
 	area         string
+	loc          *time.Location
 	todayDate    string
 	tomorrowDate string
 	today        *nordpool.DayAheadData
@@ -19,15 +20,30 @@ type PriceService struct {
 }
 
 func newPriceService(area string) *PriceService {
-	priceService := &PriceService{area: area}
+	loc, err := time.LoadLocation("Europe/Stockholm")
+	if err != nil {
+		log.Printf("PRICES: warning: could not load Europe/Stockholm timezone, falling back to Local: %v", err)
+		loc = time.Local
+	}
+	priceService := &PriceService{
+		area: area,
+		loc:  loc,
+	}
 	return priceService
+}
+
+func (ps *PriceService) now() time.Time {
+	if ps.loc != nil {
+		return time.Now().In(ps.loc)
+	}
+	return time.Now()
 }
 
 // GetCurrentPrice returns the current spot price in öre/kWh.
 // Nordpool provides prices in SEK/MWh.
 // Dividing by 10.0 converts SEK/MWh to öre/kWh (1 MWh = 1000 kWh, 1 SEK = 100 öre).
 func (ps *PriceService) GetCurrentPrice() (float64, error) {
-	now := time.Now()
+	now := ps.now()
 
 	price, err := ps.getPriceForTime(ps.today, now)
 	if err == nil {
@@ -51,9 +67,10 @@ func (ps *PriceService) getPriceForTime(data *nordpool.DayAheadData, t time.Time
 }
 
 func (ps *PriceService) updatePrices() (bool, error) {
-	now := time.Now()
+	now := ps.now()
 	todayStr := now.Format("2006-01-02")
-	tomorrowStr := now.Add(24 * time.Hour).Format("2006-01-02")
+	tomorrowTime := now.AddDate(0, 0, 1)
+	tomorrowStr := tomorrowTime.Format("2006-01-02")
 	updated := false
 
 	// 1. Rollover tomorrow -> today at midnight
@@ -78,9 +95,8 @@ func (ps *PriceService) updatePrices() (bool, error) {
 		log.Printf("PRICES: Successfully fetched 24h prices for today (%s)", todayStr)
 	}
 
-	// 3. Fetch tomorrow's 24h prices if not already cached and afternoon has arrived (>= 13:00)
+	// 3. Fetch tomorrow's 24h prices if not already cached and afternoon has arrived (>= 13:00 CET/CEST)
 	if (ps.tomorrow == nil || ps.tomorrowDate != tomorrowStr) && now.Hour() >= 13 {
-		tomorrowTime := now.Add(24 * time.Hour)
 		tomorrowData, err := nordpool.GetDayAheadPrices(tomorrowTime, "SEK", ps.area)
 		if err == nil && len(tomorrowData.MultiAreaEntries) > 0 {
 			ps.tomorrow = tomorrowData
