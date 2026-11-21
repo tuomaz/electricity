@@ -36,6 +36,7 @@ type dawnConsumerService struct {
 	pid                  *PIDController
 	setpoint             float64
 	currentPrice         float64
+	hasPrice             bool
 	currentPriceLimit    float64
 	overcurrentStartTime time.Time
 	pvShortageStartTime  time.Time
@@ -48,14 +49,15 @@ type dawnConsumerService struct {
 }
 
 func newDawnConsumerService(ctx context.Context, eventChannel chan *event, ha *haService, statusSensor string, dawnId string, dawnSwitch string, notifyDevice string, dawnCurrentId string, setpoint float64, pvOnlySwitchId string, userLimitId string, priceLimitEntity string) *dawnConsumerService {
-	haChannel := make(chan *gohaws.Message)
-	entities := []string{statusSensor, dawnCurrentId, pvOnlySwitchId}
-	if userLimitId != "" {
-		entities = append(entities, userLimitId)
-	}
+	haChannel := make(chan *gohaws.Message, 64)
+	entities := []string{}
 	if priceLimitEntity != "" {
 		entities = append(entities, priceLimitEntity)
 	}
+	if userLimitId != "" {
+		entities = append(entities, userLimitId)
+	}
+	entities = append(entities, pvOnlySwitchId, statusSensor, dawnCurrentId)
 	ha.subscribeMulti(entities, haChannel)
 
 	pid := &PIDController{
@@ -184,6 +186,14 @@ Loop:
 func (tc *dawnConsumerService) UpdatePrice(price float64) {
 	tc.mu.Lock()
 	tc.currentPrice = price
+	tc.hasPrice = true
+	tc.mu.Unlock()
+	tc.calculateAndSetAmps()
+}
+
+func (tc *dawnConsumerService) InvalidatePrice() {
+	tc.mu.Lock()
+	tc.hasPrice = false
 	tc.mu.Unlock()
 	tc.calculateAndSetAmps()
 }
@@ -253,7 +263,7 @@ func (tc *dawnConsumerService) calculateAndSetAmps() {
 
 		// Check price limit first (unless in PV-only mode)
 		priceOk := true
-		if !tc.pvOnlyMode && tc.currentPriceLimit > 0 && tc.currentPrice > tc.currentPriceLimit {
+		if !tc.pvOnlyMode && tc.currentPriceLimit > 0 && (!tc.hasPrice || tc.currentPrice > tc.currentPriceLimit) {
 			priceOk = false
 		}
 

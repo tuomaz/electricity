@@ -15,6 +15,7 @@ func TestDawnConsumer_PriceLimitStart(t *testing.T) {
 		setpoint:          20.0,
 		currentPriceLimit: 100.0,
 		currentPrice:      150.0, // Over limit
+		hasPrice:          true,
 		currents:          make(map[string]float64),
 		exports:           make(map[string]float64),
 		haService:         &haService{},
@@ -30,6 +31,30 @@ func TestDawnConsumer_PriceLimitStart(t *testing.T) {
 	service.currentPrice = 80.0
 	service.calculateAndSetAmps()
 	assert.True(t, service.isCharging, "Should start charging when price is OK")
+}
+
+func TestDawnConsumer_PriceUnknownBlocksStartWhenLimitActive(t *testing.T) {
+	service := &dawnConsumerService{
+		isCharging:        false,
+		pvOnlyMode:        false,
+		minimumAmps:       6.0,
+		maximumAmps:       16.0,
+		setpoint:          20.0,
+		currentPriceLimit: 100.0,
+		currentPrice:      0.0,
+		hasPrice:          false,
+		currents:          make(map[string]float64),
+		exports:           make(map[string]float64),
+		haService:         &haService{},
+		pid:               &PIDController{},
+	}
+
+	service.currents["phase1"] = 5.0
+	service.calculateAndSetAmps()
+	assert.False(t, service.isCharging, "Should not start charging when price limit is active but price is unknown")
+
+	service.UpdatePrice(0.0)
+	assert.True(t, service.isCharging, "Should start charging once a valid price (even 0.0) is received")
 }
 
 func TestDawnConsumer_PriceLimitStop(t *testing.T) {

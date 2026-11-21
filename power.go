@@ -31,8 +31,8 @@ type PowerService struct {
 }
 
 func newPowerService(ctx context.Context, eventChannel chan *event, ha *haService, phase1 string, phase2 string, phase3 string, export1 string, export2 string, export3 string, import1 string, import2 string, import3 string, voltage1 string, voltage2 string, voltage3 string, max float64) *PowerService {
-	haChannel := make(chan *gohaws.Message)
-	ha.subscribeMulti([]string{phase1, phase2, phase3, export1, export2, export3, import1, import2, import3, voltage1, voltage2, voltage3}, haChannel)
+	haChannel := make(chan *gohaws.Message, 64)
+	ha.subscribeMulti([]string{voltage1, voltage2, voltage3, phase1, phase2, phase3, export1, export2, export3, import1, import2, import3}, haChannel)
 
 	powerService := &PowerService{
 		ctx:          ctx,
