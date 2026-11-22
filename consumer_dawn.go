@@ -176,7 +176,7 @@ Loop:
 
 					if shouldForceSet {
 						log.Printf("DAWN: Connector transitioned %s -> %s. Enforcing current limit: %.2fA", oldStatus, state, ps.currentAmps)
-						ps.haService.updateAmpsDawn(int(ps.currentAmps), ps.dawnId)
+						ps.setAmpsInternal(ps.currentAmps)
 					}
 					ps.mu.Unlock()
 					log.Printf("DAWN: connector status: %s", state)
@@ -323,21 +323,31 @@ func (tc *dawnConsumerService) calculateAndSetAmps() {
 		return
 	}
 
-	// 2. HARD SAFETY OVERRIDE (Fuses)
+	// 2. PRICE STOP LOGIC
+	if !tc.pvOnlyMode && tc.currentPriceLimit > 0 && tc.currentPrice > tc.currentPriceLimit {
+		log.Printf("DAWN: Price limit exceeded (%.2f > %.2f öre). Stopping EV charging.", tc.currentPrice, tc.currentPriceLimit)
+		tc.stopChargingInternal()
+		return
+	}
+
+	// 3. HARD SAFETY OVERRIDE (Fuses)
 	// IMPORTANT: Fuses are per-phase, so we still use maxPhaseCurrent here!
 	hardSafetyThreshold := tc.setpoint + 2.0
 	if maxPhaseCurrent > hardSafetyThreshold {
 		// Ensure we don't react twice to the same pre-reduction phase reading before the next 10s P1 meter cycle.
-		// Require >12s cooldown plus a post-reduction reading on the overloaded phase (or >20s fallback if HA state is unchanged).
+		// Require >8s cooldown plus a post-reduction reading on the overloaded phase (or >20s fallback if HA state is unchanged).
 		hasFreshOvercurrentReading := tc.lastHardSafetyEvent.IsZero() ||
-			(time.Since(tc.lastHardSafetyEvent) > 12*time.Second &&
+			(time.Since(tc.lastHardSafetyEvent) > 8*time.Second &&
 				(tc.phaseUpdatedAt[maxPhaseKey].IsZero() ||
 					tc.phaseUpdatedAt[maxPhaseKey].After(tc.lastHardSafetyEvent) ||
 					time.Since(tc.lastHardSafetyEvent) > 20*time.Second))
 
 		if int(tc.currentAmps) <= int(tc.minimumAmps) {
 			if !tc.overcurrentStartTime.IsZero() {
-				if time.Since(tc.overcurrentStartTime) > 10*time.Second {
+				hasFreshShutdownReading := tc.phaseUpdatedAt[maxPhaseKey].IsZero() ||
+					tc.phaseUpdatedAt[maxPhaseKey].After(tc.overcurrentStartTime) ||
+					time.Since(tc.overcurrentStartTime) > 20*time.Second
+				if time.Since(tc.overcurrentStartTime) > 10*time.Second && hasFreshShutdownReading {
 					msg := fmt.Sprintf("CRITICAL OVERCURRENT (%.2fA). Emergency stop of EV charger.", maxPhaseCurrent)
 					log.Printf("DAWN: %s", msg)
 					tc.haService.sendNotification(msg, tc.notifyDevice)
@@ -376,13 +386,6 @@ func (tc *dawnConsumerService) calculateAndSetAmps() {
 		return
 	}
 	tc.overcurrentStartTime = time.Time{}
-
-	// 3. PRICE STOP LOGIC
-	if !tc.pvOnlyMode && tc.currentPriceLimit > 0 && tc.currentPrice > tc.currentPriceLimit {
-		log.Printf("DAWN: Price limit exceeded (%.2f > %.2f öre). Stopping EV charging.", tc.currentPrice, tc.currentPriceLimit)
-		tc.stopChargingInternal()
-		return
-	}
 
 	// 4. PV SHORTAGE STOP LOGIC
 	if tc.pvOnlyMode && tc.isCharging {

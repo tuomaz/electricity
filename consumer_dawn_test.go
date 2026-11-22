@@ -110,21 +110,56 @@ func TestDawnConsumer_SafetyOverride_NoDoubleReductionOnStalePhase(t *testing.T)
 	service.updateCurrents(&powerEvent{sensorType: SensorTypeImport, phaseIndex: 2, value: 24.33})
 	assert.Equal(t, 11, int(service.currentAmps), "First overcurrent should reduce 16A -> 11A")
 
-	// 2. 10 seconds later (within 12s cooldown), Phase 1 reports a normal reading while Phase 2 is still stale at 24.33A
-	service.lastHardSafetyEvent = time.Now().Add(-10 * time.Second)
+	// 2. 5 seconds later (within 8s cooldown), Phase 1 reports a normal reading while Phase 2 is still stale at 24.33A
+	service.lastHardSafetyEvent = time.Now().Add(-5 * time.Second)
 	service.updateCurrents(&powerEvent{sensorType: SensorTypeImport, phaseIndex: 1, value: 10.0})
-	assert.Equal(t, 11, int(service.currentAmps), "Should NOT double-reduce on stale Phase 2 value before 12s cooldown and fresh Phase 2 reading")
+	assert.Equal(t, 11, int(service.currentAmps), "Should NOT double-reduce on stale Phase 2 value before 8s cooldown")
 
-	// 3. Even after 13 seconds, if Phase 1 updates before Phase 2 has reported a new post-reduction reading, do not re-trigger on stale Phase 2
-	staleTime := time.Now().Add(-13 * time.Second)
+	// 3. At 10 seconds (next P1 batch), if Phase 1 updates before Phase 2 has reported a new post-reduction reading, do not re-trigger on stale Phase 2
+	staleTime := time.Now().Add(-10 * time.Second)
 	service.lastHardSafetyEvent = staleTime
 	service.phaseUpdatedAt["phase2"] = staleTime.Add(-10 * time.Millisecond)
 	service.updateCurrents(&powerEvent{sensorType: SensorTypeImport, phaseIndex: 1, value: 10.5})
 	assert.Equal(t, 11, int(service.currentAmps), "Should NOT double-reduce when Phase 2 reading is older than lastHardSafetyEvent")
 
-	// 4. Once Phase 2 reports a genuinely new overcurrent reading (22.5A) after the 12s cooldown, it should reduce further (11A -> 8A)
+	// 4. Once Phase 2 reports a genuinely new overcurrent reading (22.5A) in the 10s batch (>8s cooldown), it should reduce immediately (11A -> 8A)
 	service.updateCurrents(&powerEvent{sensorType: SensorTypeImport, phaseIndex: 2, value: 22.5})
-	assert.Equal(t, 8, int(service.currentAmps), "Should reduce once Phase 2 reports a fresh overcurrent reading after cooldown")
+	assert.Equal(t, 8, int(service.currentAmps), "Should reduce once Phase 2 reports a fresh overcurrent reading after 8s cooldown")
+}
+
+func TestDawnConsumer_SafetyOverride_EmergencyStopRequiresFreshOvercurrentReading(t *testing.T) {
+	service := &dawnConsumerService{
+		isCharging:         true,
+		currentAmps:        6.0,
+		actualAmps:         6.0,
+		minimumAmps:        6.0,
+		maximumAmps:        16.0,
+		setpoint:           20.0,
+		currents:           make(map[string]float64),
+		hasDirectionalData: make(map[string]bool),
+		phaseUpdatedAt:     make(map[string]time.Time),
+		exports:            make(map[string]float64),
+		haService:          &haService{},
+		pid: &PIDController{
+			Setpoint: 20.0,
+		},
+	}
+
+	// 1. Phase 2 spikes at minimum charging (6A) -> starts 10s shutdown timer
+	service.updateCurrents(&powerEvent{sensorType: SensorTypeImport, phaseIndex: 2, value: 23.0})
+	assert.False(t, service.overcurrentStartTime.IsZero(), "Should start 10s emergency shutdown timer")
+	assert.True(t, service.isCharging)
+
+	// 2. 10.1s later, Phase 1 reports a normal reading (5A) just before Phase 2's new reading arrives
+	t0 := time.Now().Add(-10100 * time.Millisecond)
+	service.overcurrentStartTime = t0
+	service.phaseUpdatedAt["phase2"] = t0.Add(-5 * time.Millisecond)
+	service.updateCurrents(&powerEvent{sensorType: SensorTypeImport, phaseIndex: 1, value: 5.0})
+	assert.True(t, service.isCharging, "Should NOT emergency-stop on stale Phase 2 reading when Phase 1 updates at 10.1s")
+
+	// 3. When Phase 2 reports a fresh overcurrent reading at 10.1s, emergency stop triggers
+	service.updateCurrents(&powerEvent{sensorType: SensorTypeImport, phaseIndex: 2, value: 22.8})
+	assert.False(t, service.isCharging, "Should emergency-stop once Phase 2 confirms sustained overcurrent after 10s")
 }
 
 func TestDawnConsumer_SafetyOverride_StaleActualAmpsAt6ADoesNotSkipReduction(t *testing.T) {
