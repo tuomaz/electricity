@@ -17,7 +17,9 @@ type dawnConsumerService struct {
 	haService            *haService
 	mu                   sync.RWMutex
 	currentAmps          float64 // The setting we have requested
-	actualAmps           float64 // What the car is actually drawing
+	actualAmps           float64 // What the car is actually drawing (per-phase average)
+	actualAmpsUpdatedAt  time.Time
+	lastAmpsChange       time.Time
 	minimumAmps          float64
 	maximumAmps          float64
 	userLimit            float64
@@ -33,6 +35,7 @@ type dawnConsumerService struct {
 	currents             map[string]float64
 	exports              map[string]float64
 	hasDirectionalData   map[string]bool
+	phaseUpdatedAt       map[string]time.Time
 	pid                  *PIDController
 	setpoint             float64
 	currentPrice         float64
@@ -86,6 +89,7 @@ func newDawnConsumerService(ctx context.Context, eventChannel chan *event, ha *h
 		currents:           make(map[string]float64),
 		exports:            make(map[string]float64),
 		hasDirectionalData: make(map[string]bool),
+		phaseUpdatedAt:     make(map[string]time.Time),
 		pid:                pid,
 		setpoint:           setpoint,
 		lastExecution:      time.Now(),
@@ -105,10 +109,11 @@ Loop:
 		case message, ok := <-ps.haChannel:
 			if ok {
 				if message.Event.Data.EntityID == ps.dawnCurrentId {
-					totalAmps := parseFloat(message.Event.Data.NewState.State)
+					amps := parseFloat(message.Event.Data.NewState.State)
 					ps.mu.Lock()
-					// Divide by 3 because the sensor is a sum of all 3 phases
-					ps.actualAmps = totalAmps / 3.0
+					// sensor.dawn_current_import from OCPP already reports per-phase current (A)
+					ps.actualAmps = amps
+					ps.actualAmpsUpdatedAt = time.Now()
 					ps.mu.Unlock()
 				} else if message.Event.Data.EntityID == ps.userLimitId {
 					limit := parseFloat(message.Event.Data.NewState.State)
@@ -199,6 +204,9 @@ func (tc *dawnConsumerService) InvalidatePrice() {
 }
 
 func (tc *dawnConsumerService) updateCurrents(pe *powerEvent) {
+	if pe.sensorType == SensorTypeVoltage {
+		return
+	}
 	phaseKey := fmt.Sprintf("phase%d", pe.phaseIndex)
 
 	tc.mu.Lock()
@@ -211,25 +219,37 @@ func (tc *dawnConsumerService) updateCurrents(pe *powerEvent) {
 	if tc.hasDirectionalData == nil {
 		tc.hasDirectionalData = make(map[string]bool)
 	}
+	if tc.phaseUpdatedAt == nil {
+		tc.phaseUpdatedAt = make(map[string]time.Time)
+	}
+	updated := false
 	if pe.sensorType == SensorTypeExport {
 		tc.exports[phaseKey] = pe.value
 		// If we are exporting, import current is 0
 		tc.currents[phaseKey] = 0
 		tc.hasDirectionalData[phaseKey] = true
+		tc.phaseUpdatedAt[phaseKey] = time.Now()
+		updated = true
 	} else if pe.sensorType == SensorTypeImport {
 		tc.currents[phaseKey] = pe.value
 		// If we are importing, export current is 0
 		tc.exports[phaseKey] = 0
 		tc.hasDirectionalData[phaseKey] = true
+		tc.phaseUpdatedAt[phaseKey] = time.Now()
+		updated = true
 	} else if pe.sensorType == SensorTypeCurrent {
 		// Use absolute current sensor ONLY as a fallback if we haven't seen directional data.
 		if !tc.hasDirectionalData[phaseKey] {
 			tc.currents[phaseKey] = pe.value
+			tc.phaseUpdatedAt[phaseKey] = time.Now()
+			updated = true
 		}
 	}
 	tc.mu.Unlock()
 
-	tc.calculateAndSetAmps()
+	if updated {
+		tc.calculateAndSetAmps()
+	}
 }
 
 func (tc *dawnConsumerService) isActuallyCharging() bool {
@@ -254,7 +274,7 @@ func (tc *dawnConsumerService) calculateAndSetAmps() {
 	tc.mu.Lock()
 	defer tc.mu.Unlock()
 
-	maxPhaseCurrent := tc.getMaxCurrentInternal()
+	maxPhaseKey, maxPhaseCurrent := tc.getMaxPhaseAndCurrentInternal()
 	netExport := tc.getNetExportInternal()
 
 	// 1. RESTART LOGIC
@@ -306,26 +326,39 @@ func (tc *dawnConsumerService) calculateAndSetAmps() {
 	// 2. HARD SAFETY OVERRIDE (Fuses)
 	// IMPORTANT: Fuses are per-phase, so we still use maxPhaseCurrent here!
 	hardSafetyThreshold := tc.setpoint + 2.0
-	if maxPhaseCurrent > hardSafetyThreshold && time.Since(tc.lastHardSafetyEvent) > 5*time.Second {
-		// BASELINE: Use Actual Draw if it's lower than our current setting
-		baseline := math.Min(tc.currentAmps, tc.actualAmps)
-		if baseline < tc.minimumAmps {
-			baseline = tc.currentAmps // Fallback if actual is weirdly low (e.g. 0 during ramp)
-		}
+	if maxPhaseCurrent > hardSafetyThreshold {
+		// Ensure we don't react twice to the same pre-reduction phase reading before the next 10s P1 meter cycle.
+		// Require >12s cooldown plus a post-reduction reading on the overloaded phase (or >20s fallback if HA state is unchanged).
+		hasFreshOvercurrentReading := tc.lastHardSafetyEvent.IsZero() ||
+			(time.Since(tc.lastHardSafetyEvent) > 12*time.Second &&
+				(tc.phaseUpdatedAt[maxPhaseKey].IsZero() ||
+					tc.phaseUpdatedAt[maxPhaseKey].After(tc.lastHardSafetyEvent) ||
+					time.Since(tc.lastHardSafetyEvent) > 20*time.Second))
 
-		if baseline <= tc.minimumAmps {
-			if tc.overcurrentStartTime.IsZero() {
+		if int(tc.currentAmps) <= int(tc.minimumAmps) {
+			if !tc.overcurrentStartTime.IsZero() {
+				if time.Since(tc.overcurrentStartTime) > 10*time.Second {
+					msg := fmt.Sprintf("CRITICAL OVERCURRENT (%.2fA). Emergency stop of EV charger.", maxPhaseCurrent)
+					log.Printf("DAWN: %s", msg)
+					tc.haService.sendNotification(msg, tc.notifyDevice)
+
+					tc.stopChargingInternal()
+					return
+				}
+			} else if hasFreshOvercurrentReading {
 				tc.overcurrentStartTime = time.Now()
 				log.Printf("DAWN: Overcurrent detected at minimum charging. Starting 10s shutdown timer.")
-			} else if time.Since(tc.overcurrentStartTime) > 10*time.Second {
-				msg := fmt.Sprintf("CRITICAL OVERCURRENT (%.2fA). Emergency stop of EV charger.", maxPhaseCurrent)
-				log.Printf("DAWN: %s", msg)
-				tc.haService.sendNotification(msg, tc.notifyDevice)
-
-				tc.stopChargingInternal()
-				return
 			}
-		} else {
+			return
+		} else if hasFreshOvercurrentReading {
+			// BASELINE: Use Actual Draw (rounded up to pilot step) if it's lower than our current setting and was sampled after our last amp change
+			baseline := tc.currentAmps
+			actualBaseline := math.Ceil(tc.actualAmps)
+			if actualBaseline >= tc.minimumAmps && actualBaseline < baseline &&
+				(tc.lastAmpsChange.IsZero() || tc.actualAmpsUpdatedAt.After(tc.lastAmpsChange.Add(5*time.Second))) {
+				baseline = actualBaseline
+			}
+
 			overage := maxPhaseCurrent - tc.setpoint
 			reduction := math.Ceil(overage)
 
@@ -337,6 +370,7 @@ func (tc *dawnConsumerService) calculateAndSetAmps() {
 				tc.pid.Integral = 0
 				tc.lastHardSafetyEvent = time.Now()
 				tc.lastExecution = time.Now()
+				tc.overcurrentStartTime = time.Time{}
 			}
 		}
 		return
@@ -490,6 +524,7 @@ func (tc *dawnConsumerService) setAmps(amps float64) {
 
 func (tc *dawnConsumerService) setAmpsInternal(amps float64) {
 	tc.currentAmps = amps
+	tc.lastAmpsChange = time.Now()
 	tc.haService.updateAmpsDawn(int(tc.currentAmps), tc.dawnId)
 }
 
@@ -500,11 +535,18 @@ func (tc *dawnConsumerService) getMaxCurrent() float64 {
 }
 
 func (tc *dawnConsumerService) getMaxCurrentInternal() float64 {
+	_, max := tc.getMaxPhaseAndCurrentInternal()
+	return max
+}
+
+func (tc *dawnConsumerService) getMaxPhaseAndCurrentInternal() (string, float64) {
+	maxKey := ""
 	max := 0.0
-	for _, value := range tc.currents {
+	for key, value := range tc.currents {
 		if value > max {
 			max = value
+			maxKey = key
 		}
 	}
-	return max
+	return maxKey, max
 }
