@@ -14,6 +14,12 @@ type PIDController struct {
 	LastTime   time.Time
 }
 
+func (p *PIDController) Reset() {
+	p.Integral = 0
+	p.LastError = 0
+	p.LastTime = time.Now()
+}
+
 func (p *PIDController) Update(measurement float64) float64 {
 	now := time.Now()
 	if p.LastTime.IsZero() {
@@ -32,9 +38,11 @@ func (p *PIDController) Update(measurement float64) float64 {
 	// Proportional term
 	P := p.Kp * error
 
-	// Integral term (with basic anti-windup: only accumulate if error is significant)
+	// Integral term (with basic anti-windup: only accumulate if error is significant,
+	// and cap effective dt to 35s so lockouts/pauses don't cause an instant integral spike)
 	if math.Abs(error) > 0.01 {
-		p.Integral += error * dt
+		integralDt := math.Min(dt, 35.0)
+		p.Integral += error * integralDt
 	}
 
 	// Clamp integral to prevent massive windup
