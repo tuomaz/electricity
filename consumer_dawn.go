@@ -131,9 +131,8 @@ Loop:
 					ps.pvOnlyMode = state == "on"
 					if oldMode != ps.pvOnlyMode {
 						log.Printf("DAWN: PV-only mode changed: %v -> %v. Resetting PID.", oldMode, ps.pvOnlyMode)
-						ps.pid.Integral = 0
-						ps.pid.LastError = 0
-						ps.pid.LastTime = time.Time{}
+						ps.pid.Reset()
+						ps.lastExecution = time.Now()
 					}
 					ps.mu.Unlock()
 					ps.calculateAndSetAmps()
@@ -158,19 +157,35 @@ Loop:
 						shouldForceSet = true
 					}
 
+					isChargingState := state == "charging" || state == "3" || state == "busy"
+					wasChargingState := oldStatus == "charging" || oldStatus == "3" || oldStatus == "busy"
+					if isChargingState && !wasChargingState {
+						// Reset PID and throttle timer when the car actually starts drawing current
+						ps.pid.Reset()
+						ps.lastExecution = time.Now()
+					}
+
 					// Sync isCharging state with reality
+					externalStart := false
 					switch state {
 					case "charging", "3", "busy":
 						if !ps.isCharging {
 							log.Printf("DAWN: Detected external charging start. Enabling safety monitoring.")
 							ps.isCharging = true
 							ps.currentAmps = ps.minimumAmps
+							ps.overcurrentStartTime = time.Time{}
+							ps.pvSurplusStartTime = time.Time{}
+							ps.pvShortageStartTime = time.Time{}
 							shouldForceSet = true
+							externalStart = true
 						}
 					case "disconnected", "1", "finishing", "error":
 						if ps.isCharging {
 							log.Printf("DAWN: Detected charging stop (Status: %s).", state)
 							ps.isCharging = false
+							ps.overcurrentStartTime = time.Time{}
+							ps.pvSurplusStartTime = time.Time{}
+							ps.pvShortageStartTime = time.Time{}
 						}
 					}
 
@@ -180,6 +195,9 @@ Loop:
 					}
 					ps.mu.Unlock()
 					log.Printf("DAWN: connector status: %s", state)
+					if externalStart {
+						ps.calculateAndSetAmps()
+					}
 				}
 			} else {
 				break Loop
@@ -315,7 +333,8 @@ func (tc *dawnConsumerService) calculateAndSetAmps() {
 			tc.isCharging = true
 			tc.haService.setDawnSwitch(true, tc.dawnSwitch)
 			tc.setAmpsInternal(tc.minimumAmps)
-			tc.pid.Integral = 0
+			tc.pid.Reset()
+			tc.lastExecution = time.Now()
 			tc.overcurrentStartTime = time.Time{}
 			tc.pvSurplusStartTime = time.Time{}
 			tc.pvShortageStartTime = time.Time{}
@@ -377,7 +396,7 @@ func (tc *dawnConsumerService) calculateAndSetAmps() {
 			if int(newAmps) != int(tc.currentAmps) {
 				log.Printf("DAWN: HARD SAFETY REDUCTION! Max phase %.2fA. Car drawing %.2fA. Reducing setting %vA -> %vA", maxPhaseCurrent, tc.actualAmps, int(tc.currentAmps), int(newAmps))
 				tc.setAmpsInternal(newAmps)
-				tc.pid.Integral = 0
+				tc.pid.Reset()
 				tc.lastHardSafetyEvent = time.Now()
 				tc.lastExecution = time.Now()
 				tc.overcurrentStartTime = time.Time{}
@@ -449,6 +468,12 @@ func (tc *dawnConsumerService) calculateAndSetAmps() {
 
 	if tc.pvOnlyMode {
 		adjustment = -adjustment
+	}
+
+	// Cap single-step upward adjustments to +2.0A per PID cycle to prevent
+	// aggressive jumps before the car and P1 meter reflect the new load.
+	if adjustment > 2.0 {
+		adjustment = 2.0
 	}
 
 	targetAmps := tc.currentAmps + adjustment

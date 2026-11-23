@@ -63,3 +63,23 @@ func TestPIDController_Derivative(t *testing.T) {
 	pid.Update(18.0) 
 	assert.True(t, pid.LastError == 2.0)
 }
+
+func TestPIDController_ResetAndIntegralDtClamp(t *testing.T) {
+	pid := &PIDController{
+		Ki:        1.0,
+		Setpoint:  20.0,
+		Integral:  25.0,
+		LastError: 5.0,
+	}
+
+	pid.Reset()
+	assert.Equal(t, 0.0, pid.Integral)
+	assert.Equal(t, 0.0, pid.LastError)
+	assert.WithinDuration(t, time.Now(), pid.LastTime, time.Second)
+
+	// Simulate a 10-minute pause before the next Update call: integralDt should be capped to 35.0s
+	pid.LastTime = time.Now().Add(-10 * time.Minute)
+	output := pid.Update(19.0) // error = 1.0
+	assert.Equal(t, 35.0, pid.Integral, "Integral accumulation should cap effective dt to 35s rather than hitting the 50.0 clamp")
+	assert.Equal(t, 35.0, output)
+}
