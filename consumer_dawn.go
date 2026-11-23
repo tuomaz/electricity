@@ -132,6 +132,7 @@ Loop:
 					if oldMode != ps.pvOnlyMode {
 						log.Printf("DAWN: PV-only mode changed: %v -> %v. Resetting PID.", oldMode, ps.pvOnlyMode)
 						ps.pid.Reset()
+						ps.lastExecution = time.Now()
 					}
 					ps.mu.Unlock()
 					ps.calculateAndSetAmps()
@@ -172,6 +173,9 @@ Loop:
 							log.Printf("DAWN: Detected external charging start. Enabling safety monitoring.")
 							ps.isCharging = true
 							ps.currentAmps = ps.minimumAmps
+							ps.overcurrentStartTime = time.Time{}
+							ps.pvSurplusStartTime = time.Time{}
+							ps.pvShortageStartTime = time.Time{}
 							shouldForceSet = true
 							externalStart = true
 						}
@@ -179,6 +183,9 @@ Loop:
 						if ps.isCharging {
 							log.Printf("DAWN: Detected charging stop (Status: %s).", state)
 							ps.isCharging = false
+							ps.overcurrentStartTime = time.Time{}
+							ps.pvSurplusStartTime = time.Time{}
+							ps.pvShortageStartTime = time.Time{}
 						}
 					}
 

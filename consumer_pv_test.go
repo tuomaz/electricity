@@ -238,9 +238,13 @@ func TestDawnConsumer_ForceStartAt6A(t *testing.T) {
 	currentAmps := service.currentAmps
 	service.mu.RUnlock()
 
+	haSvc.mu.RLock()
+	lastAmpsUpdate := haSvc.LastAmpsUpdate
+	haSvc.mu.RUnlock()
+
 	assert.True(t, isCharging, "Should enable safety monitoring / charging flag")
 	assert.Equal(t, 6.0, currentAmps, "Should enforce starting at 6A on external start")
-	assert.Equal(t, 6, haSvc.LastAmpsUpdate, "Should send 6A command to Home Assistant")
+	assert.Equal(t, 6, lastAmpsUpdate, "Should send 6A command to Home Assistant")
 }
 
 func TestDawnConsumer_InternalStart_EnforceOnPreparing(t *testing.T) {
@@ -279,5 +283,9 @@ func TestDawnConsumer_InternalStart_EnforceOnPreparing(t *testing.T) {
 
 	time.Sleep(50 * time.Millisecond)
 
-	assert.Equal(t, 6, haSvc.LastAmpsUpdate, "Should enforce 6A limit when connector transitions to preparing")
+	haSvc.mu.RLock()
+	lastAmpsUpdate := haSvc.LastAmpsUpdate
+	haSvc.mu.RUnlock()
+
+	assert.Equal(t, 6, lastAmpsUpdate, "Should enforce 6A limit when connector transitions to preparing")
 }
